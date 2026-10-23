@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 
 import 'screens/splash_screen.dart';
+import 'screens/auth_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -115,9 +116,9 @@ class HomePage extends StatelessWidget {
                         height: 58,
                         child: ElevatedButton(
                           onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Welcome to BetterRoutes!'),
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => const AuthScreen(),
                               ),
                             );
                           },
