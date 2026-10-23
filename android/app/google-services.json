@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "698588431992",
+    "project_id": "betterroutes-79436",
+    "storage_bucket": "betterroutes-79436.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:698588431992:android:c649b860d9ab4eb698cf8d",
+        "android_client_info": {
+          "package_name": "com.example.my_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCUosuyXXD3n--RN_WtlggOSghTB0kjEPM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
