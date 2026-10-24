@@ -3,7 +3,9 @@ import 'package:firebase_core/firebase_core.dart';
 
 import 'firebase_options.dart';
 
-import 'screens/splash_screen.dart';
+// TEMPORARY: disabled while home: points at MapPage, restore on revert.
+// import 'screens/splash_screen.dart';
+import 'pages/map_page.dart';  // TEMPORARY: local device test, revert before commit.
 import 'screens/auth_screen.dart';
 
 Future<void> main() async {
@@ -31,7 +33,7 @@ class BetterRoutesApp extends StatelessWidget {
         ),
         fontFamily: 'Roboto',
       ),
-      home: const SplashScreen(),
+      home: const MapPage(),  // TEMPORARY: was SplashScreen(), revert before commit.
     );
   }
 }

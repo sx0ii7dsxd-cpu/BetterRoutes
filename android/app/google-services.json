@@ -7,12 +7,17 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:698588431992:android:c649b860d9ab4eb698cf8d",
+        "mobilesdk_app_id": "1:698588431992:android:a02d61969ca64b4398cf8d",
         "android_client_info": {
-          "package_name": "com.example.my_app"
+          "package_name": "com.betterroutes.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "698588431992-5u8rc9ptv8g2tl87eiljt2rrnagcplb5.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyCUosuyXXD3n--RN_WtlggOSghTB0kjEPM"
@@ -20,7 +25,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "698588431992-5u8rc9ptv8g2tl87eiljt2rrnagcplb5.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "698588431992-50f18j99ca3n00nflsg9h7trtqaoevc9.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.betterroutes.app"
+              }
+            }
+          ]
         }
       }
     }

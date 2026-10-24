@@ -1,4 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required by Firebase Auth / Google Sign-In. Debug builds get this injected
+         automatically, but release builds do not, which breaks every network call. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- Location for the OpenStreetMap page. Both are declared together so
+         Android 12+ can offer the Precise / Approximate choice in its dialog. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+
     <application
         android:label="my_app"
         android:name="${applicationName}"
