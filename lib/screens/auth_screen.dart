@@ -107,7 +107,9 @@ class _AuthScreenState extends State<AuthScreen> {
     try {
       final googleSignIn = GoogleSignIn.instance;
 
-      await googleSignIn.initialize();
+      await googleSignIn.initialize(
+        serverClientId: "698588431992-5u8rc9ptv8g2tl87eiljt2rrnagcplb5.apps.googleusercontent.com",
+      );
 
       final googleUser = await googleSignIn.authenticate();
 
