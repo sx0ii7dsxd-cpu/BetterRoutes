@@ -52,7 +52,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCUosuyXXD3n--RN_WtlggOSghTB0kjEPM',
-    appId: '1:698588431992:android:c649b860d9ab4eb698cf8d',
+    appId: '1:698588431992:android:a02d61969ca64b4398cf8d',
     messagingSenderId: '698588431992',
     projectId: 'betterroutes-79436',
     storageBucket: 'betterroutes-79436.firebasestorage.app',

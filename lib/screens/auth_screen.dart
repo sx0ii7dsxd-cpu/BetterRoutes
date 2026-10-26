@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import '../pages/map_page.dart';
+
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
 
@@ -67,8 +69,11 @@ class _AuthScreenState extends State<AuthScreen> {
 
       if (!mounted) return;
 
-      // The app's authenticated destination will be connected next.
       _showMessage('Authentication successful!');
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const MapPage()),
+        (route) => false,
+      );
     } on FirebaseAuthException catch (e) {
       _showMessage(_firebaseErrorMessage(e.code));
     } catch (_) {
@@ -124,6 +129,10 @@ class _AuthScreenState extends State<AuthScreen> {
       if (!mounted) return;
 
       _showMessage('Google sign-in successful!');
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const MapPage()),
+        (route) => false,
+      );
     } on FirebaseAuthException catch (e) {
       _showMessage(_firebaseErrorMessage(e.code));
     } catch (_) {

@@ -282,11 +282,11 @@ class _MapPageState extends State<MapPage> {
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: borderColor),
             ),
-            child: const Row(
+            child: Row(
               children: [
-                Icon(Icons.map_outlined, color: purple, size: 20),
-                SizedBox(width: 10),
-                Expanded(
+                const Icon(Icons.map_outlined, color: purple, size: 20),
+                const SizedBox(width: 10),
+                const Expanded(
                   child: Text(
                     'BetterRoutes',
                     style: TextStyle(
@@ -295,6 +295,13 @@ class _MapPageState extends State<MapPage> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                ),
+                const SizedBox(width: 12),
+                Image.asset(
+                  'assets/images/BetterRoutes.png',
+                  width: 30,
+                  height: 30,
+                  fit: BoxFit.contain,
                 ),
               ],
             ),

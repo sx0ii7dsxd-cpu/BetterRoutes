@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "698588431992-2jom4f39ii1h8bn4ov2h3k694tpk3d6s.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.betterroutes.app",
+            "certificate_hash": "dc209b168a67de4848ae800d731f628db2d31704"
+          }
+        },
+        {
           "client_id": "698588431992-5u8rc9ptv8g2tl87eiljt2rrnagcplb5.apps.googleusercontent.com",
           "client_type": 3
         }
