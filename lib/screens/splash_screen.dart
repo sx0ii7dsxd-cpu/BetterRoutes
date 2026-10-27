@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import '../pages/map_page.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -45,11 +47,14 @@ class _SplashScreenState extends State<SplashScreen>
       parent: _animationController,
       curve: const Interval(0.45, 0.9, curve: Curves.easeOut),
     );
-    _timer = Timer(const Duration(milliseconds: 2000), () {
+    _timer = Timer(const Duration(milliseconds: 2500), () {
       if (mounted) {
+        final Widget destination = FirebaseAuth.instance.currentUser == null
+            ? const HomePage()
+            : const MapPage();
         Navigator.of(context).pushReplacement(
           PageRouteBuilder<void>(
-            pageBuilder: (_, animation, _) => const HomePage(),
+            pageBuilder: (_, animation, _) => destination,
             transitionDuration: const Duration(milliseconds: 450),
             reverseTransitionDuration: Duration.zero,
             transitionsBuilder: (_, animation, _, child) {

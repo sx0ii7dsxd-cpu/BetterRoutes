@@ -141,7 +141,6 @@ class HomePage extends StatelessWidget {
                                 ),
                               ),
                               SizedBox(width: 10),
-                              Icon(Icons.arrow_forward_rounded, size: 20),
                             ],
                           ),
                         ),

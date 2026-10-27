@@ -283,17 +283,11 @@ This configures:
 - Android application ID
 - Debug and release builds
 
-The current Android application ID is:
-
-    com.example.my_app
-
-This is still a default Flutter-style name. It should eventually be changed
-to a permanent Better Routes ID, for example:
+The Android application ID is:
 
     com.betterroutes.app
 
-If it is changed, Firebase must also be updated with the new Android package
-name.
+This matches the Android package registered in Firebase.
 
 android/app/src/main/AndroidManifest.xml
 
@@ -308,8 +302,8 @@ handling still needs to be implemented in Dart.
 
 android/app/google-services.json
 
-This connects the Android app to the Firebase project. It currently identifies
-the Android package as com.example.my_app.
+This connects the Android app to the Firebase project. It identifies the
+Android package as com.betterroutes.app.
 
 android/settings.gradle.kts
 
@@ -344,8 +338,8 @@ This connects the iOS app to Firebase. The iOS Firebase bundle ID is:
 
     com.betterroutes.app
 
-The Android package is currently com.example.my_app. Android and iOS use
-separate identifiers, but the final names should be chosen intentionally.
+The Android package is com.betterroutes.app. Android and iOS use separate
+identifiers, but both are registered with Firebase.
 
 ios/Podfile
 
@@ -417,10 +411,12 @@ history could not be inspected directly.
 
 Phase 1: Clean up project identity
 
-1. Rename the project from my_app to BetterRoutes.
-2. Choose a permanent Android application ID.
-3. Confirm the iOS bundle identifier.
-4. Register the final Android and iOS IDs in Firebase.
+1. Update remaining display names from my_app/My App to BetterRoutes where
+   desired.
+2. Keep the Android application ID as com.betterroutes.app.
+3. Confirm the iOS bundle identifier remains com.betterroutes.app if iOS is
+   supported again later.
+4. Keep the Android and iOS Firebase registrations aligned with their IDs.
 5. Update the README with setup instructions.
 6. Agree with your friend on branch ownership and merge rules.
 

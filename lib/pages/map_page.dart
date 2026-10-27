@@ -67,6 +67,7 @@ class _MapPageState extends State<MapPage> {
     '/maps/${_mapTilerStyleId.trim()}/style.json',
     {'key': _mapTilerApiKey.trim()},
   ).toString();
+  bool _isDarkMode = true;
 
   @override
   void initState() {
@@ -551,6 +552,10 @@ class _MapPageState extends State<MapPage> {
             controller: _searchController,
             isSearching: _isSearching,
             onSearch: _searchPlace,
+            isDarkMode: _isDarkMode,
+            onThemeToggle: () {
+              setState(() => _isDarkMode = !_isDarkMode);
+            },
             onProfileTap: _openProfile,
           ),
         ),
@@ -638,12 +643,16 @@ class _SearchProfileBar extends StatelessWidget {
     required this.controller,
     required this.isSearching,
     required this.onSearch,
+    required this.isDarkMode,
+    required this.onThemeToggle,
     required this.onProfileTap,
   });
 
   final TextEditingController controller;
   final bool isSearching;
   final ValueChanged<String> onSearch;
+  final bool isDarkMode;
+  final VoidCallback onThemeToggle;
   final VoidCallback onProfileTap;
 
   @override
@@ -665,8 +674,16 @@ class _SearchProfileBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.search_rounded, color: purple, size: 23),
-          const SizedBox(width: 11),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.asset(
+              'assets/images/BetterRoutes.png',
+              width: 40,
+              height: 60,
+              fit: BoxFit.contain,
+            ),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: TextField(
               controller: controller,
@@ -679,8 +696,8 @@ class _SearchProfileBar extends StatelessWidget {
               ),
               cursorColor: purple,
               decoration: const InputDecoration(
-                hintText: 'Search places or addresses',
-                hintStyle: TextStyle(color: mutedColor, fontSize: 14),
+                hintText: 'Search here ',
+                hintStyle: TextStyle(color: mutedColor, fontSize: 18),
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: EdgeInsets.zero,
@@ -689,7 +706,7 @@ class _SearchProfileBar extends StatelessWidget {
           ),
           if (isSearching)
             const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8),
+              padding: EdgeInsets.symmetric(horizontal: 9),
               child: SizedBox(
                 width: 19,
                 height: 19,
@@ -699,10 +716,22 @@ class _SearchProfileBar extends StatelessWidget {
           else
             Container(
               width: 1,
-              height: 28,
+              height: 25,
               color: borderColor,
-              margin: const EdgeInsets.symmetric(horizontal: 9),
+              margin: const EdgeInsets.symmetric(horizontal: 5),
             ),
+          IconButton(
+            onPressed: onThemeToggle,
+            tooltip: isDarkMode
+                ? 'Switch to bright mode'
+                : 'Switch to dark mode',
+            visualDensity: VisualDensity.compact,
+            icon: Icon(
+              isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+              color: textColor,
+              size: 28,
+            ),
+          ),
           Semantics(
             button: true,
             label: 'Open profile',
@@ -727,12 +756,12 @@ class _LocationMarker extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Container(
-        width: 28,
-        height: 28,
+        width: 15,
+        height: 15,
         decoration: BoxDecoration(
           color: const Color(0xFF5CC6A3),
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 4),
+          border: Border.all(color: Colors.white, width: 2),
           boxShadow: [
             BoxShadow(
               color: const Color(0xFF5CC6A3).withValues(alpha: 0.45),

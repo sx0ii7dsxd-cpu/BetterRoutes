@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../main.dart';
+
 class ProfileMenu extends StatelessWidget {
   const ProfileMenu({super.key});
 
@@ -142,7 +144,10 @@ class ProfileMenu extends StatelessWidget {
       return;
     }
     if (!context.mounted) return;
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const HomePage()),
+      (route) => false,
+    );
   }
 }
 
