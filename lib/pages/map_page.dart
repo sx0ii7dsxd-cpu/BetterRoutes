@@ -3,10 +3,12 @@ import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart' as legacy;
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong.dart' as latlong;
+import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
 
 import 'profile_menu.dart';
 
@@ -29,17 +31,35 @@ enum _LocationState { checking, ready, serviceDisabled, denied, deniedForever }
 class _MapPageState extends State<MapPage> {
   static const String _tileUrl =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-  final MapController _mapController = MapController();
+  static const String _mapTilerApiKey = String.fromEnvironment(
+    'MAPTILER_API_KEY',
+  );
+  static const String _mapTilerStyleId = String.fromEnvironment(
+    'MAPTILER_STYLE_ID',
+  );
+
+  final legacy.MapController _legacyMapController = legacy.MapController();
   final TextEditingController _searchController = TextEditingController();
   final http.Client _httpClient = http.Client();
 
+  maplibre.MapLibreMapController? _mapLibreController;
   _LocationState _state = _LocationState.checking;
   Position? _position;
-  LatLng? _searchedLocation;
+  maplibre.LatLng? _searchedLocation;
   String? _searchedName;
   DateTime? _lastSearchTime;
   bool _busy = false;
   bool _isSearching = false;
+  bool _mapStyleLoaded = false;
+
+  bool get _hasMapTilerConfig =>
+      _mapTilerApiKey.isNotEmpty && _mapTilerStyleId.isNotEmpty;
+
+  String get _mapTilerStyleUrl => Uri.https(
+    'api.maptiler.com',
+    '/maps/$_mapTilerStyleId/style.json',
+    {'key': _mapTilerApiKey},
+  ).toString();
 
   @override
   void initState() {
@@ -49,7 +69,7 @@ class _MapPageState extends State<MapPage> {
 
   @override
   void dispose() {
-    _mapController.dispose();
+    _legacyMapController.dispose();
     _searchController.dispose();
     _httpClient.close();
     super.dispose();
@@ -146,10 +166,21 @@ class _MapPageState extends State<MapPage> {
     await _resolveLocation();
   }
 
-  void _recenter() {
+  Future<void> _recenter() async {
     final Position? position = _position;
     if (position == null) return;
-    _mapController.move(LatLng(position.latitude, position.longitude), 16);
+    final maplibre.LatLng here = maplibre.LatLng(
+      position.latitude,
+      position.longitude,
+    );
+    if (_hasMapTilerConfig) {
+      await _moveMapLibreCamera(here, 16);
+    } else {
+      _legacyMapController.move(
+        latlong.LatLng(position.latitude, position.longitude),
+        16,
+      );
+    }
     if (_searchedLocation != null) {
       setState(() {
         _searchedLocation = null;
@@ -210,14 +241,23 @@ class _MapPageState extends State<MapPage> {
         return;
       }
 
-      final LatLng place = LatLng(latitude, longitude);
+      final maplibre.LatLng place = maplibre.LatLng(latitude, longitude);
       final String name = result['display_name'] as String? ?? query;
       if (!mounted) return;
       setState(() {
         _searchedLocation = place;
         _searchedName = name;
       });
-      _mapController.move(place, 15);
+      if (_hasMapTilerConfig) {
+        await _moveMapLibreCamera(place, 15);
+        await _refreshMapAnnotations();
+      } else {
+        _legacyMapController.move(
+          latlong.LatLng(place.latitude, place.longitude),
+          15,
+        );
+      }
+      if (!mounted) return;
       FocusScope.of(context).unfocus();
     } on TimeoutException {
       _showMessage('Place search took too long. Please try again.');
@@ -239,6 +279,67 @@ class _MapPageState extends State<MapPage> {
         backgroundColor: surface,
       ),
     );
+  }
+
+  Future<void> _moveMapLibreCamera(maplibre.LatLng target, double zoom) async {
+    final maplibre.MapLibreMapController? controller = _mapLibreController;
+    if (controller == null) return;
+    await controller.animateCamera(
+      maplibre.CameraUpdate.newLatLngZoom(target, zoom),
+    );
+  }
+
+  void _onMapLibreCreated(maplibre.MapLibreMapController controller) {
+    _mapLibreController = controller;
+  }
+
+  void _onMapLibreStyleLoaded() {
+    _mapStyleLoaded = true;
+    unawaited(_refreshMapAnnotations());
+    final maplibre.LatLng? searchedLocation = _searchedLocation;
+    if (searchedLocation != null) {
+      unawaited(_moveMapLibreCamera(searchedLocation, 15));
+    }
+  }
+
+  Future<void> _refreshMapAnnotations() async {
+    if (!_mapStyleLoaded) return;
+    final maplibre.MapLibreMapController? controller = _mapLibreController;
+    if (controller == null) return;
+
+    try {
+      await controller.clearCircles();
+      final List<maplibre.CircleOptions> circles = [];
+      final Position? position = _position;
+      if (position != null) {
+        circles.add(
+          maplibre.CircleOptions(
+            geometry: maplibre.LatLng(position.latitude, position.longitude),
+            circleRadius: 9,
+            circleColor: '#5CC6A3',
+            circleStrokeWidth: 3,
+            circleStrokeColor: '#FFFFFF',
+          ),
+        );
+      }
+      final maplibre.LatLng? searchedLocation = _searchedLocation;
+      if (searchedLocation != null) {
+        circles.add(
+          maplibre.CircleOptions(
+            geometry: searchedLocation,
+            circleRadius: 8,
+            circleColor: '#B39DDB',
+            circleStrokeWidth: 2,
+            circleStrokeColor: '#FFFFFF',
+          ),
+        );
+      }
+      if (circles.isNotEmpty) {
+        await controller.addCircles(circles);
+      }
+    } on PlatformException {
+      _showMessage('Could not update map markers. Please try again.');
+    }
   }
 
   void _openMenu() {
@@ -358,46 +459,46 @@ class _MapPageState extends State<MapPage> {
       return const Center(child: CircularProgressIndicator(color: purple));
     }
 
-    final LatLng here = LatLng(position.latitude, position.longitude);
-
     return Stack(
       children: [
-        FlutterMap(
-          mapController: _mapController,
-          options: MapOptions(initialCenter: here, initialZoom: 16),
-          children: [
-            TileLayer(
-              urlTemplate: _tileUrl,
-              userAgentPackageName: 'com.betterroutes.app',
-            ),
-            MarkerLayer(
-              markers: [
-                Marker(
-                  point: here,
-                  width: 54,
-                  height: 54,
-                  child: const _LocationMarker(),
-                ),
-                if (_searchedLocation case final LatLng place)
-                  Marker(
-                    point: place,
-                    width: 48,
-                    height: 54,
-                    child: const Icon(
-                      Icons.location_pin,
-                      color: purple,
-                      size: 48,
+        Positioned.fill(
+          child: _hasMapTilerConfig
+              ? maplibre.MapLibreMap(
+                  styleString: _mapTilerStyleUrl,
+                  initialCameraPosition: maplibre.CameraPosition(
+                    target: maplibre.LatLng(
+                      position.latitude,
+                      position.longitude,
                     ),
+                    zoom: 16,
                   ),
-              ],
-            ),
-            const RichAttributionWidget(
-              attributions: [
-                TextSourceAttribution('© OpenStreetMap contributors'),
-              ],
-            ),
-          ],
+                  onMapCreated: _onMapLibreCreated,
+                  onStyleLoadedCallback: _onMapLibreStyleLoaded,
+                  attributionButtonPosition:
+                      maplibre.AttributionButtonPosition.bottomLeft,
+                  logoEnabled: false,
+                )
+              : _buildLegacyMap(position),
         ),
+        if (!_hasMapTilerConfig)
+          Positioned(
+            top: 88,
+            left: 16,
+            right: 16,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: surface.withValues(alpha: 0.96),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: borderColor),
+              ),
+              child: const Text(
+                'Using the current map until MapTiler style settings are added.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: mutedColor, fontSize: 12),
+              ),
+            ),
+          ),
         Positioned(
           top: 12,
           left: 16,
@@ -442,6 +543,46 @@ class _MapPageState extends State<MapPage> {
               ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLegacyMap(Position position) {
+    final latlong.LatLng here = latlong.LatLng(
+      position.latitude,
+      position.longitude,
+    );
+
+    return legacy.FlutterMap(
+      mapController: _legacyMapController,
+      options: legacy.MapOptions(initialCenter: here, initialZoom: 16),
+      children: [
+        legacy.TileLayer(
+          urlTemplate: _tileUrl,
+          userAgentPackageName: 'com.betterroutes.app',
+        ),
+        legacy.MarkerLayer(
+          markers: [
+            legacy.Marker(
+              point: here,
+              width: 54,
+              height: 54,
+              child: const _LocationMarker(),
+            ),
+            if (_searchedLocation case final maplibre.LatLng place)
+              legacy.Marker(
+                point: latlong.LatLng(place.latitude, place.longitude),
+                width: 48,
+                height: 54,
+                child: const Icon(Icons.location_pin, color: purple, size: 48),
+              ),
+          ],
+        ),
+        const legacy.RichAttributionWidget(
+          attributions: [
+            legacy.TextSourceAttribution('© OpenStreetMap contributors'),
+          ],
         ),
       ],
     );
