@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
-import 'app_theme.dart';
 import 'firebase_options.dart';
 
 import 'screens/splash_screen.dart';
@@ -23,7 +22,15 @@ class BetterRoutesApp extends StatelessWidget {
     return MaterialApp(
       title: 'BetterRoutes',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark,
+      theme: ThemeData(
+        useMaterial3: true,
+        scaffoldBackgroundColor: Colors.white,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFB39DDB),
+          brightness: Brightness.light,
+        ),
+        fontFamily: 'Roboto',
+      ),
       home: const SplashScreen(),
     );
   }
@@ -32,9 +39,11 @@ class BetterRoutesApp extends StatelessWidget {
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
-  static const Color backgroundColor = AppColors.jetBlack;
-  static const Color darkText = AppColors.text;
-  static const Color secondaryText = AppColors.mutedText;
+  static const Color backgroundColor = Color(0xFF17131F);
+  static const Color purple = Color(0xFFB39DDB);
+  static const Color lightPurple = Color(0xFFF3EEFC);
+  static const Color darkText = Color(0xFFF7F5FC);
+  static const Color secondaryText = Color(0xFFB5AEC5);
 
   @override
   Widget build(BuildContext context) {
@@ -114,8 +123,8 @@ class HomePage extends StatelessWidget {
                             );
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.royalAmethyst,
-                            foregroundColor: AppColors.electricCyan,
+                            backgroundColor: purple,
+                            foregroundColor: Colors.white,
                             elevation: 0,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(20),

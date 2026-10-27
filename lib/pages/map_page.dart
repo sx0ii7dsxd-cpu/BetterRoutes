@@ -8,15 +8,14 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
-import '../app_theme.dart';
 import 'profile_menu.dart';
 
-const Color background = AppColors.jetBlack;
-const Color purple = AppColors.electricCyan;
-const Color textColor = AppColors.text;
-const Color mutedColor = AppColors.mutedText;
-const Color surface = AppColors.surface;
-const Color borderColor = AppColors.royalAmethyst;
+const Color background = Color(0xFF17131F);
+const Color purple = Color(0xFFB39DDB);
+const Color textColor = Color(0xFFF7F5FC);
+const Color mutedColor = Color(0xFFB5AEC5);
+const Color surface = Color(0xFF211C2B);
+const Color borderColor = Color(0xFF383044);
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -546,12 +545,12 @@ class _LocationMarker extends StatelessWidget {
         width: 28,
         height: 28,
         decoration: BoxDecoration(
-          color: AppColors.electricCyan,
+          color: const Color(0xFF5CC6A3),
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white, width: 4),
           boxShadow: [
             BoxShadow(
-              color: AppColors.electricCyan.withValues(alpha: 0.45),
+              color: const Color(0xFF5CC6A3).withValues(alpha: 0.45),
               blurRadius: 14,
               spreadRadius: 3,
             ),
@@ -578,20 +577,14 @@ class _FloatingMapButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: prominent
-          ? AppColors.royalAmethyst
-          : surface.withValues(alpha: 0.97),
+      color: prominent ? purple : surface.withValues(alpha: 0.97),
       shape: const CircleBorder(),
       elevation: 7,
       shadowColor: Colors.black.withValues(alpha: 0.3),
       child: IconButton(
         onPressed: onPressed,
         tooltip: tooltip,
-        icon: Icon(
-          icon,
-          color: prominent ? AppColors.electricCyan : textColor,
-          size: 23,
-        ),
+        icon: Icon(icon, color: prominent ? background : textColor, size: 23),
         style: IconButton.styleFrom(
           fixedSize: const Size(54, 54),
           shape: const CircleBorder(),
@@ -859,8 +852,8 @@ class _MessagePane extends StatelessWidget {
               child: ElevatedButton(
                 onPressed: busy ? null : onPressed,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.royalAmethyst,
-                  foregroundColor: AppColors.electricCyan,
+                  backgroundColor: purple,
+                  foregroundColor: background,
                   disabledBackgroundColor: purple.withValues(alpha: 0.5),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),

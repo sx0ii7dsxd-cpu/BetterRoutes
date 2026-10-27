@@ -1,17 +1,15 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import '../app_theme.dart';
-
 class ProfileMenu extends StatelessWidget {
   const ProfileMenu({super.key});
 
-  static const Color _background = AppColors.jetBlack;
-  static const Color _purple = AppColors.electricCyan;
-  static const Color _text = AppColors.text;
-  static const Color _muted = AppColors.mutedText;
-  static const Color _surface = AppColors.surface;
-  static const Color _border = AppColors.royalAmethyst;
+  static const Color _background = Color(0xFF17131F);
+  static const Color _purple = Color(0xFFB39DDB);
+  static const Color _text = Color(0xFFF7F5FC);
+  static const Color _muted = Color(0xFFB5AEC5);
+  static const Color _surface = Color(0xFF211C2B);
+  static const Color _border = Color(0xFF383044);
 
   @override
   Widget build(BuildContext context) {
@@ -154,7 +152,8 @@ class ProfileAvatar extends StatelessWidget {
   final User? user;
   final double radius;
 
-  static const Color _purple = AppColors.royalAmethyst;
+  static const Color _background = Color(0xFF17131F);
+  static const Color _purple = Color(0xFFB39DDB);
 
   @override
   Widget build(BuildContext context) {
@@ -175,7 +174,7 @@ class ProfileAvatar extends StatelessWidget {
       child: Text(
         initials,
         style: TextStyle(
-          color: AppColors.electricCyan,
+          color: _background,
           fontSize: radius * 0.63,
           fontWeight: FontWeight.w800,
         ),

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../app_theme.dart';
 import '../main.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -36,7 +35,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.jetBlack,
+      backgroundColor: const Color(0xFF17131F),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -53,14 +52,17 @@ class _SplashScreenState extends State<SplashScreen> {
               style: TextStyle(
                 fontSize: 32,
                 fontWeight: FontWeight.bold,
-                color: AppColors.electricCyan,
+                color: Colors.white,
                 letterSpacing: 1.2,
               ),
             ),
             const SizedBox(height: 10),
             Text(
               'Smarter routes. Better journeys.',
-              style: TextStyle(fontSize: 15, color: AppColors.mutedText),
+              style: TextStyle(
+                fontSize: 15,
+                color: Colors.white.withValues(alpha: 0.85),
+              ),
             ),
           ],
         ),

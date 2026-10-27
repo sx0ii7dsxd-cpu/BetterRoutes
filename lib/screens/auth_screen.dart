@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
-import '../app_theme.dart';
 import '../pages/map_page.dart';
 
 class AuthScreen extends StatefulWidget {
@@ -22,10 +21,10 @@ class _AuthScreenState extends State<AuthScreen> {
   bool _obscurePassword = true;
   bool _isLoading = false;
 
-  static const Color background = AppColors.jetBlack;
-  static const Color purple = AppColors.electricCyan;
-  static const Color textColor = AppColors.text;
-  static const Color mutedColor = AppColors.mutedText;
+  static const Color background = Color(0xFF17131F);
+  static const Color purple = Color(0xFFB39DDB);
+  static const Color textColor = Color(0xFFF7F5FC);
+  static const Color mutedColor = Color(0xFFB5AEC5);
 
   @override
   void dispose() {
@@ -201,20 +200,20 @@ class _AuthScreenState extends State<AuthScreen> {
               )
             : null,
         filled: true,
-        fillColor: AppColors.surface,
+        fillColor: const Color(0xFF211C2B),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppColors.royalAmethyst),
+          borderSide: const BorderSide(color: Color(0xFF383044)),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: const BorderSide(color: purple, width: 1.5),
         ),
-        errorStyle: const TextStyle(color: AppColors.error),
+        errorStyle: const TextStyle(color: Color(0xFFFF8A80)),
       ),
     );
   }
@@ -262,7 +261,7 @@ class _AuthScreenState extends State<AuthScreen> {
                     Container(
                       padding: const EdgeInsets.all(5),
                       decoration: BoxDecoration(
-                        color: AppColors.surface,
+                        color: const Color(0xFF211C2B),
                         borderRadius: BorderRadius.circular(15),
                       ),
                       child: Row(
@@ -336,8 +335,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       child: ElevatedButton(
                         onPressed: _isLoading ? null : _authenticate,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.royalAmethyst,
-                          foregroundColor: AppColors.electricCyan,
+                          backgroundColor: purple,
+                          foregroundColor: background,
                           disabledBackgroundColor: purple.withValues(
                             alpha: 0.5,
                           ),
@@ -365,9 +364,7 @@ class _AuthScreenState extends State<AuthScreen> {
                     const SizedBox(height: 24),
                     const Row(
                       children: [
-                        Expanded(
-                          child: Divider(color: AppColors.royalAmethyst),
-                        ),
+                        Expanded(child: Divider(color: Color(0xFF383044))),
                         Padding(
                           padding: EdgeInsets.symmetric(horizontal: 14),
                           child: Text(
@@ -375,9 +372,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             style: TextStyle(color: mutedColor),
                           ),
                         ),
-                        Expanded(
-                          child: Divider(color: AppColors.royalAmethyst),
-                        ),
+                        Expanded(child: Divider(color: Color(0xFF383044))),
                       ],
                     ),
                     const SizedBox(height: 24),
@@ -391,7 +386,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       label: const Text('Continue with Google'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: textColor,
-                        side: const BorderSide(color: AppColors.royalAmethyst),
+                        side: const BorderSide(color: Color(0xFF494052)),
                         minimumSize: const Size.fromHeight(54),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
@@ -433,14 +428,14 @@ class _AuthScreenState extends State<AuthScreen> {
           duration: const Duration(milliseconds: 180),
           padding: const EdgeInsets.symmetric(vertical: 13),
           decoration: BoxDecoration(
-            color: selected ? AppColors.royalAmethyst : Colors.transparent,
+            color: selected ? purple : Colors.transparent,
             borderRadius: BorderRadius.circular(11),
           ),
           child: Text(
             label,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: selected ? AppColors.electricCyan : mutedColor,
+              color: selected ? background : mutedColor,
               fontWeight: FontWeight.w600,
             ),
           ),
