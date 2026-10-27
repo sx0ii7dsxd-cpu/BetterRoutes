@@ -17,9 +17,10 @@ class _AuthScreenState extends State<AuthScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
-  bool _isLogin = true;
+  bool _isCreatingAccount = false;
   bool _obscurePassword = true;
   bool _isLoading = false;
+  String? _authMessage;
 
   static const Color background = Color(0xFF17131F);
   static const Color purple = Color(0xFFB39DDB);
@@ -49,40 +50,62 @@ class _AuthScreenState extends State<AuthScreen> {
     try {
       final auth = FirebaseAuth.instance;
 
-      if (_isLogin) {
-        await auth.signInWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text,
-        );
-      } else {
+      if (_isCreatingAccount) {
         final credential = await auth.createUserWithEmailAndPassword(
           email: _emailController.text.trim(),
           password: _passwordController.text,
         );
-
         final name = _nameController.text.trim();
-
         if (name.isNotEmpty) {
           await credential.user?.updateDisplayName(name);
         }
+      } else {
+        await auth.signInWithEmailAndPassword(
+          email: _emailController.text.trim(),
+          password: _passwordController.text,
+        );
       }
 
       if (!mounted) return;
-
       _showMessage('Authentication successful!');
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const MapPage()),
         (route) => false,
       );
     } on FirebaseAuthException catch (e) {
+      if ((e.code == 'user-not-found' || e.code == 'invalid-credential') &&
+          !_isCreatingAccount &&
+          mounted) {
+        setState(() {
+          _isCreatingAccount = true;
+          _authMessage =
+              'This email does not have an account. Create one below.';
+        });
+        return;
+      }
+      if (e.code == 'email-already-in-use' && _isCreatingAccount && mounted) {
+        setState(() {
+          _isCreatingAccount = false;
+          _authMessage = 'This email already has an account. Sign in below.';
+        });
+        return;
+      }
       _showMessage(_firebaseErrorMessage(e.code));
     } catch (_) {
       _showMessage('Something went wrong. Please try again.');
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _resetEmailFlow() {
+    setState(() {
+      _isCreatingAccount = false;
+      _authMessage = null;
+      _nameController.clear();
+      _passwordController.clear();
+      _formKey.currentState?.reset();
+    });
   }
 
   String _firebaseErrorMessage(String code) {
@@ -258,33 +281,45 @@ class _AuthScreenState extends State<AuthScreen> {
                       style: TextStyle(color: mutedColor, fontSize: 15),
                     ),
                     const SizedBox(height: 32),
-                    Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF211C2B),
-                        borderRadius: BorderRadius.circular(15),
+                    OutlinedButton.icon(
+                      onPressed: _isLoading ? null : _signInWithGoogle,
+                      icon: const Icon(
+                        Icons.g_mobiledata,
+                        size: 30,
+                        color: textColor,
                       ),
-                      child: Row(
-                        children: [
-                          _tabButton('Login', true),
-                          _tabButton('Register', false),
-                        ],
+                      label: const Text('Continue with Google'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: textColor,
+                        side: const BorderSide(color: Color(0xFF494052)),
+                        minimumSize: const Size.fromHeight(54),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 25),
-                    if (!_isLogin) ...[
-                      _textField(
-                        controller: _nameController,
-                        label: 'Full name',
-                        icon: Icons.person_outline,
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Please enter your name.';
-                          }
-                          return null;
-                        },
+                    const SizedBox(height: 24),
+                    const Row(
+                      children: [
+                        Expanded(child: Divider(color: Color(0xFF383044))),
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 14),
+                          child: Text(
+                            'OR CONTINUE WITH EMAIL',
+                            style: TextStyle(color: mutedColor, fontSize: 12),
+                          ),
+                        ),
+                        Expanded(child: Divider(color: Color(0xFF383044))),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    if (_authMessage != null) ...[
+                      Text(
+                        _authMessage!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: textColor, fontSize: 13),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
                     ],
                     _textField(
                       controller: _emailController,
@@ -301,6 +336,20 @@ class _AuthScreenState extends State<AuthScreen> {
                       },
                     ),
                     const SizedBox(height: 16),
+                    if (_isCreatingAccount) ...[
+                      _textField(
+                        controller: _nameController,
+                        label: 'Full name',
+                        icon: Icons.person_outline,
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Enter your name to create an account.';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     _textField(
                       controller: _passwordController,
                       label: 'Password',
@@ -310,13 +359,13 @@ class _AuthScreenState extends State<AuthScreen> {
                         if (value == null || value.isEmpty) {
                           return 'Please enter your password.';
                         }
-                        if (!_isLogin && value.length < 6) {
+                        if (_isCreatingAccount && value.length < 6) {
                           return 'Use at least 6 characters.';
                         }
                         return null;
                       },
                     ),
-                    if (_isLogin)
+                    if (!_isCreatingAccount)
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
@@ -326,9 +375,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             style: TextStyle(color: purple),
                           ),
                         ),
-                      )
-                    else
-                      const SizedBox(height: 20),
+                      ),
                     const SizedBox(height: 8),
                     SizedBox(
                       height: 54,
@@ -353,7 +400,9 @@ class _AuthScreenState extends State<AuthScreen> {
                                 ),
                               )
                             : Text(
-                                _isLogin ? 'Login' : 'Create Account',
+                                _isCreatingAccount
+                                    ? 'Create Account'
+                                    : 'Sign in',
                                 style: const TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
@@ -361,82 +410,41 @@ class _AuthScreenState extends State<AuthScreen> {
                               ),
                       ),
                     ),
-                    const SizedBox(height: 24),
-                    const Row(
-                      children: [
-                        Expanded(child: Divider(color: Color(0xFF383044))),
-                        Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 14),
-                          child: Text(
-                            'OR',
-                            style: TextStyle(color: mutedColor),
-                          ),
-                        ),
-                        Expanded(child: Divider(color: Color(0xFF383044))),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    OutlinedButton.icon(
-                      onPressed: _isLoading ? null : _signInWithGoogle,
-                      icon: const Icon(
-                        Icons.g_mobiledata,
-                        size: 30,
-                        color: textColor,
-                      ),
-                      label: const Text('Continue with Google'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: textColor,
-                        side: const BorderSide(color: Color(0xFF494052)),
-                        minimumSize: const Size.fromHeight(54),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
+                    const SizedBox(height: 8),
+                    if (!_isCreatingAccount)
+                      TextButton(
+                        onPressed: _isLoading
+                            ? null
+                            : () {
+                                setState(() {
+                                  _isCreatingAccount = true;
+                                  _authMessage = null;
+                                  _passwordController.clear();
+                                });
+                              },
+                        child: const Text(
+                          'Create a new account',
+                          style: TextStyle(color: purple),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 22),
+                    if (_isCreatingAccount)
+                      TextButton(
+                        onPressed: _isLoading ? null : _resetEmailFlow,
+                        child: const Text(
+                          'Use a different email',
+                          style: TextStyle(color: purple),
+                        ),
+                      ),
                     Text(
-                      _isLogin
-                          ? "Don't have an account? Register above."
-                          : 'Already have an account? Login above.',
+                      _isCreatingAccount
+                          ? 'Create an account with your email and password.'
+                          : 'Enter your password to sign in.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: mutedColor, fontSize: 13),
                     ),
                   ],
                 ),
               ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _tabButton(String label, bool loginTab) {
-    final selected = _isLogin == loginTab;
-
-    return Expanded(
-      child: GestureDetector(
-        onTap: _isLoading
-            ? null
-            : () {
-                setState(() {
-                  _isLogin = loginTab;
-                  _formKey.currentState?.reset();
-                });
-              },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 13),
-          decoration: BoxDecoration(
-            color: selected ? purple : Colors.transparent,
-            borderRadius: BorderRadius.circular(11),
-          ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: selected ? background : mutedColor,
-              fontWeight: FontWeight.w600,
             ),
           ),
         ),
