@@ -36,7 +36,9 @@ class _MapPageState extends State<MapPage> {
   );
   static const String _mapTilerStyleId = String.fromEnvironment(
     'MAPTILER_STYLE_ID',
+    defaultValue: '01a17d04-02f5-792b-8055-66c8af6dad5f',
   );
+  static const Duration _mapLibreLoadTimeout = Duration(seconds: 30);
 
   final legacy.MapController _legacyMapController = legacy.MapController();
   final TextEditingController _searchController = TextEditingController();
@@ -51,14 +53,19 @@ class _MapPageState extends State<MapPage> {
   bool _busy = false;
   bool _isSearching = false;
   bool _mapStyleLoaded = false;
+  bool _isMapLibreActive = false;
+  String? _mapFallbackMessage;
+  Timer? _mapLibreLoadTimer;
 
   bool get _hasMapTilerConfig =>
-      _mapTilerApiKey.isNotEmpty && _mapTilerStyleId.isNotEmpty;
+      _mapTilerApiKey.trim().isNotEmpty &&
+      _mapTilerApiKey.trim() != 'YOUR_MAPTILER_API_KEY' &&
+      _mapTilerStyleId.trim().isNotEmpty;
 
   String get _mapTilerStyleUrl => Uri.https(
     'api.maptiler.com',
-    '/maps/$_mapTilerStyleId/style.json',
-    {'key': _mapTilerApiKey},
+    '/maps/${_mapTilerStyleId.trim()}/style.json',
+    {'key': _mapTilerApiKey.trim()},
   ).toString();
 
   @override
@@ -69,6 +76,7 @@ class _MapPageState extends State<MapPage> {
 
   @override
   void dispose() {
+    _mapLibreLoadTimer?.cancel();
     _legacyMapController.dispose();
     _searchController.dispose();
     _httpClient.close();
@@ -133,7 +141,10 @@ class _MapPageState extends State<MapPage> {
       setState(() {
         _position = position;
         _state = _LocationState.ready;
+        _isMapLibreActive = _hasMapTilerConfig;
+        _mapFallbackMessage = _hasMapTilerConfig ? null : 'Add your MapTiler API key to .env.maptiler.json to enable the custom style.';
       });
+      if (_isMapLibreActive) _startMapLibreLoadTimer();
     } catch (_) {
       _setState(_LocationState.denied);
     }
@@ -173,7 +184,7 @@ class _MapPageState extends State<MapPage> {
       position.latitude,
       position.longitude,
     );
-    if (_hasMapTilerConfig) {
+    if (_isMapLibreActive) {
       await _moveMapLibreCamera(here, 16);
     } else {
       _legacyMapController.move(
@@ -248,7 +259,7 @@ class _MapPageState extends State<MapPage> {
         _searchedLocation = place;
         _searchedName = name;
       });
-      if (_hasMapTilerConfig) {
+      if (_isMapLibreActive) {
         await _moveMapLibreCamera(place, 15);
         await _refreshMapAnnotations();
       } else {
@@ -283,23 +294,54 @@ class _MapPageState extends State<MapPage> {
 
   Future<void> _moveMapLibreCamera(maplibre.LatLng target, double zoom) async {
     final maplibre.MapLibreMapController? controller = _mapLibreController;
-    if (controller == null) return;
-    await controller.animateCamera(
-      maplibre.CameraUpdate.newLatLngZoom(target, zoom),
-    );
+    if (controller == null || !_mapStyleLoaded) return;
+    try {
+      await controller.animateCamera(
+        maplibre.CameraUpdate.newLatLngZoom(target, zoom),
+      );
+    } on PlatformException {
+      _fallbackToLegacyMap(
+        'The custom map could not be controlled. Showing the standard map.',
+      );
+    }
   }
 
   void _onMapLibreCreated(maplibre.MapLibreMapController controller) {
     _mapLibreController = controller;
+    _startMapLibreLoadTimer();
   }
 
   void _onMapLibreStyleLoaded() {
+    _mapLibreLoadTimer?.cancel();
     _mapStyleLoaded = true;
     unawaited(_refreshMapAnnotations());
     final maplibre.LatLng? searchedLocation = _searchedLocation;
     if (searchedLocation != null) {
       unawaited(_moveMapLibreCamera(searchedLocation, 15));
     }
+  }
+
+  void _startMapLibreLoadTimer() {
+    _mapLibreLoadTimer?.cancel();
+    _mapLibreLoadTimer = Timer(_mapLibreLoadTimeout, () {
+      if (_isMapLibreActive && !_mapStyleLoaded) {
+        _fallbackToLegacyMap(
+          'The custom map did not finish loading. Showing the standard map.',
+        );
+      }
+    });
+  }
+
+  void _fallbackToLegacyMap(String message) {
+    if (!mounted || !_isMapLibreActive) return;
+    _mapLibreLoadTimer?.cancel();
+    setState(() {
+      _isMapLibreActive = false;
+      _mapStyleLoaded = false;
+      _mapLibreController = null;
+      _mapFallbackMessage = message;
+    });
+    _showMessage(message);
   }
 
   Future<void> _refreshMapAnnotations() async {
@@ -338,7 +380,9 @@ class _MapPageState extends State<MapPage> {
         await controller.addCircles(circles);
       }
     } on PlatformException {
-      _showMessage('Could not update map markers. Please try again.');
+      _fallbackToLegacyMap(
+        'The custom map could not update its markers. Showing the standard map.',
+      );
     }
   }
 
@@ -462,7 +506,7 @@ class _MapPageState extends State<MapPage> {
     return Stack(
       children: [
         Positioned.fill(
-          child: _hasMapTilerConfig
+          child: _isMapLibreActive
               ? maplibre.MapLibreMap(
                   styleString: _mapTilerStyleUrl,
                   initialCameraPosition: maplibre.CameraPosition(
@@ -480,7 +524,7 @@ class _MapPageState extends State<MapPage> {
                 )
               : _buildLegacyMap(position),
         ),
-        if (!_hasMapTilerConfig)
+        if (!_isMapLibreActive && _mapFallbackMessage != null)
           Positioned(
             top: 88,
             left: 16,
@@ -492,8 +536,8 @@ class _MapPageState extends State<MapPage> {
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: borderColor),
               ),
-              child: const Text(
-                'Using the current map until MapTiler style settings are added.',
+              child: Text(
+                _mapFallbackMessage!,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: mutedColor, fontSize: 12),
               ),
