@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../app_theme.dart';
 import '../main.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -19,9 +20,9 @@ class _SplashScreenState extends State<SplashScreen> {
     super.initState();
     _timer = Timer(const Duration(milliseconds: 2500), () {
       if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomePage()),
-        );
+        Navigator.of(
+          context,
+        ).pushReplacement(MaterialPageRoute(builder: (_) => const HomePage()));
       }
     });
   }
@@ -35,7 +36,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF17131F),
+      backgroundColor: AppColors.jetBlack,
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -52,17 +53,14 @@ class _SplashScreenState extends State<SplashScreen> {
               style: TextStyle(
                 fontSize: 32,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: AppColors.electricCyan,
                 letterSpacing: 1.2,
               ),
             ),
             const SizedBox(height: 10),
             Text(
               'Smarter routes. Better journeys.',
-              style: TextStyle(
-                fontSize: 15,
-                color: Colors.white.withValues(alpha: 0.85),
-              ),
+              style: TextStyle(fontSize: 15, color: AppColors.mutedText),
             ),
           ],
         ),
