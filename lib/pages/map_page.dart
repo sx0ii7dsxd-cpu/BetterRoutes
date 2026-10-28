@@ -54,7 +54,6 @@ class _MapPageState extends State<MapPage> {
   bool _isSearching = false;
   bool _mapStyleLoaded = false;
   bool _isMapLibreActive = false;
-  String? _mapFallbackMessage;
   Timer? _mapLibreLoadTimer;
 
   bool get _hasMapTilerConfig =>
@@ -143,7 +142,6 @@ class _MapPageState extends State<MapPage> {
         _position = position;
         _state = _LocationState.ready;
         _isMapLibreActive = _hasMapTilerConfig;
-        _mapFallbackMessage = _hasMapTilerConfig ? null : 'Add your MapTiler API key to .env.maptiler.json to enable the custom style.';
       });
       if (_isMapLibreActive) _startMapLibreLoadTimer();
     } catch (_) {
@@ -340,7 +338,6 @@ class _MapPageState extends State<MapPage> {
       _isMapLibreActive = false;
       _mapStyleLoaded = false;
       _mapLibreController = null;
-      _mapFallbackMessage = message;
     });
     _showMessage(message);
   }
@@ -392,6 +389,10 @@ class _MapPageState extends State<MapPage> {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
+      sheetAnimationStyle: const AnimationStyle(
+        duration: Duration(milliseconds: 420),
+        reverseDuration: Duration(milliseconds: 320),
+      ),
       builder: (sheetContext) => _MapMenuSheet(
         onAddWarehouse: () => _closeMenuWithMessage(
           sheetContext,
@@ -525,25 +526,6 @@ class _MapPageState extends State<MapPage> {
                 )
               : _buildLegacyMap(position),
         ),
-        if (!_isMapLibreActive && _mapFallbackMessage != null)
-          Positioned(
-            top: 88,
-            left: 16,
-            right: 16,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: surface.withValues(alpha: 0.96),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: borderColor),
-              ),
-              child: Text(
-                _mapFallbackMessage!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: mutedColor, fontSize: 12),
-              ),
-            ),
-          ),
         Positioned(
           top: 12,
           left: 16,
@@ -558,6 +540,19 @@ class _MapPageState extends State<MapPage> {
             },
             onProfileTap: _openProfile,
           ),
+        ),
+        DraggableScrollableSheet(
+          initialChildSize: 0.3,
+          minChildSize: 0.27,
+          maxChildSize: 0.6,
+          snap: true,
+          snapSizes: const [0.3, 0.6],
+          builder: (context, scrollController) {
+            return _ProjectPanel(
+              scrollController: scrollController,
+              onAction: _showMessage,
+            );
+          },
         ),
         if (_searchedName case final String name)
           Positioned(
@@ -582,6 +577,7 @@ class _MapPageState extends State<MapPage> {
                 icon: Icons.menu_rounded,
                 tooltip: 'Open map menu',
                 onPressed: _openMenu,
+                backgroundColor: const Color(0xFF6F5A9B),
               ),
               const SizedBox(height: 12),
               _FloatingMapButton(
@@ -781,17 +777,21 @@ class _FloatingMapButton extends StatelessWidget {
     required this.tooltip,
     required this.onPressed,
     this.prominent = false,
+    this.backgroundColor,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback onPressed;
   final bool prominent;
+  final Color? backgroundColor;
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: prominent ? purple : surface.withValues(alpha: 0.97),
+      color:
+          backgroundColor ??
+          (prominent ? purple : surface.withValues(alpha: 0.97)),
       shape: const CircleBorder(),
       elevation: 7,
       shadowColor: Colors.black.withValues(alpha: 0.3),
@@ -952,6 +952,173 @@ class _MapMenuSheet extends StatelessWidget {
               onTap: onAbout,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProjectPanel extends StatelessWidget {
+  const _ProjectPanel({required this.scrollController, required this.onAction});
+
+  final ScrollController scrollController;
+  final ValueChanged<String> onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: background.withValues(alpha: 0.98),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border.all(color: borderColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.32),
+            blurRadius: 22,
+            offset: const Offset(0, -6),
+          ),
+        ],
+      ),
+      child: CustomScrollView(
+        controller: scrollController,
+        physics: const BouncingScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: Column(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: borderColor,
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Plan your journey',
+                              style: TextStyle(
+                                color: textColor,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            SizedBox(height: 5),
+                            Text(
+                              'Everything you need for a better route.',
+                              style: TextStyle(color: mutedColor, fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.route_rounded, color: purple, size: 30),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 120),
+            sliver: SliverGrid(
+              delegate: SliverChildListDelegate([
+                _ProjectActionCard(
+                  icon: Icons.route_rounded,
+                  title: 'Plan a route',
+                  subtitle: 'Find the best way to go',
+                  onTap: () => onAction('Route planning is coming soon.'),
+                ),
+                _ProjectActionCard(
+                  icon: Icons.bookmark_border_rounded,
+                  title: 'Saved places',
+                  subtitle: 'Keep favourite destinations',
+                  onTap: () => onAction('Saved places are coming soon.'),
+                ),
+                _ProjectActionCard(
+                  icon: Icons.local_shipping_outlined,
+                  title: 'Track delivery',
+                  subtitle: 'Follow a shipment live',
+                  onTap: () => onAction('Delivery tracking is coming soon.'),
+                ),
+                _ProjectActionCard(
+                  icon: Icons.history_rounded,
+                  title: 'Recent searches',
+                  subtitle: 'Return to a previous place',
+                  onTap: () => onAction('Recent searches are coming soon.'),
+                ),
+              ]),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                childAspectRatio: 1.45,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProjectActionCard extends StatelessWidget {
+  const _ProjectActionCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: surface,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: borderColor),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, color: purple, size: 26),
+              const Spacer(),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: textColor,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: mutedColor, fontSize: 11),
+              ),
+            ],
+          ),
         ),
       ),
     );
