@@ -5,6 +5,7 @@
       "name": "BetterRoutes (MapTiler)",
       "request": "launch",
       "type": "dart",
+      "deviceId": "YXVCOZ4DCQQC5XYT",
       "toolArgs": [
         "--dart-define-from-file=.env.maptiler.json"
       ]

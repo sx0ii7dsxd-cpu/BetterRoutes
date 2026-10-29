@@ -26,13 +26,33 @@ gitignored. Keep `.env.maptiler.example.json` as the safe template.
 Run the app with:
 
 ```sh
-flutter run --dart-define-from-file=.env.maptiler.json
+flutter run -d YXVCOZ4DCQQC5XYT --dart-define-from-file=.env.maptiler.json
 ```
 
 MapTiler API keys are needed by the client to load the style and tiles; restrict
 the key in your MapTiler account. Until a real key is configured, the app uses
 the existing OpenStreetMap renderer. If MapLibre does not finish loading its
 style, it falls back to OpenStreetMap.
+
+To make plain `flutter run` use these arguments in PowerShell, add this
+function to your PowerShell profile (`$PROFILE`):
+
+```powershell
+function flutter {
+    $flutterCommand = (Get-Command flutter.bat -CommandType Application).Source
+
+    if ($args.Count -eq 0 -or $args[0] -eq 'run') {
+        & $flutterCommand run -d YXVCOZ4DCQQC5XYT --dart-define-from-file=.env.maptiler.json @($args | Select-Object -Skip 1)
+    } else {
+        & $flutterCommand @args
+    }
+}
+```
+
+Create or open the profile with `notepad $PROFILE`, save the function, and
+restart PowerShell. This changes only the PowerShell command on your machine;
+`flutter build`, `flutter pub`, and other Flutter commands continue to work
+normally. In VS Code, use the `BetterRoutes (MapTiler)` launch profile.
 
 The Android project already declares Internet and location permissions and
 uses a minimum SDK above MapLibre's Android API 21 requirement. MapLibre
