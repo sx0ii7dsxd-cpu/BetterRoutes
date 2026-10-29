@@ -236,6 +236,9 @@ class _MapPageState extends State<MapPage> {
           'autocomplete': 'true',
           'limit': '5',
           'language': 'en',
+          'country': 'in',
+          if (_position != null)
+            'proximity': '${_position!.longitude},${_position!.latitude}',
         },
       );
 
