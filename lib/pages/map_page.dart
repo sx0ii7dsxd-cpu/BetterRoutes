@@ -43,6 +43,9 @@ class _MapPageState extends State<MapPage> {
   final legacy.MapController _legacyMapController = legacy.MapController();
   final TextEditingController _searchController = TextEditingController();
   final http.Client _httpClient = http.Client();
+  Timer? _suggestionDebounce;
+  List<Map<String, dynamic>> _placeSuggestions = [];
+  bool _isLoadingSuggestions = false;
 
   maplibre.MapLibreMapController? _mapLibreController;
   _LocationState _state = _LocationState.checking;
@@ -77,6 +80,7 @@ class _MapPageState extends State<MapPage> {
   @override
   void dispose() {
     _mapLibreLoadTimer?.cancel();
+    _suggestionDebounce?.cancel();
     _legacyMapController.dispose();
     _searchController.dispose();
     _httpClient.close();
@@ -195,6 +199,85 @@ class _MapPageState extends State<MapPage> {
       setState(() {
         _searchedLocation = null;
         _searchedName = null;
+      });
+    }
+  }
+
+  void _onSearchTextChanged(String rawQuery) {
+    _suggestionDebounce?.cancel();
+
+    final String query = rawQuery.trim();
+
+    if (query.length < 2 || _mapTilerApiKey.trim().isEmpty) {
+      setState(() {
+        _placeSuggestions = [];
+        _isLoadingSuggestions = false;
+      });
+      return;
+    }
+
+    _suggestionDebounce = Timer(
+      const Duration(milliseconds: 400),
+      () => _fetchPlaceSuggestions(query),
+    );
+  }
+
+  Future<void> _fetchPlaceSuggestions(String query) async {
+    if (!mounted) return;
+
+    setState(() => _isLoadingSuggestions = true);
+
+    try {
+      final Uri uri = Uri.https(
+        'api.maptiler.com',
+        '/geocoding/${Uri.encodeComponent(query)}.json',
+        {
+          'key': _mapTilerApiKey.trim(),
+          'autocomplete': 'true',
+          'limit': '5',
+          'language': 'en',
+        },
+      );
+
+      final response = await _httpClient
+          .get(uri)
+          .timeout(const Duration(seconds: 8));
+
+      if (!mounted) return;
+
+      if (response.statusCode != 200) {
+        setState(() {
+          _placeSuggestions = [];
+          _isLoadingSuggestions = false;
+        });
+        return;
+      }
+
+      final decoded = jsonDecode(response.body);
+      final features = decoded is Map ? decoded['features'] : null;
+
+      final List<Map<String, dynamic>> suggestions = [];
+
+      if (features is List) {
+        for (final item in features) {
+          if (item is Map &&
+              item['center'] is List &&
+              item['place_name'] is String) {
+            suggestions.add(Map<String, dynamic>.from(item));
+          }
+        }
+      }
+
+      setState(() {
+        _placeSuggestions = suggestions;
+        _isLoadingSuggestions = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+
+      setState(() {
+        _placeSuggestions = [];
+        _isLoadingSuggestions = false;
       });
     }
   }
@@ -534,6 +617,7 @@ class _MapPageState extends State<MapPage> {
             controller: _searchController,
             isSearching: _isSearching,
             onSearch: _searchPlace,
+            onTextChanged: _onSearchTextChanged,
             isDarkMode: _isDarkMode,
             onThemeToggle: () {
               setState(() => _isDarkMode = !_isDarkMode);
@@ -541,6 +625,52 @@ class _MapPageState extends State<MapPage> {
             onProfileTap: _openProfile,
           ),
         ),
+        if (_placeSuggestions.isNotEmpty || _isLoadingSuggestions)
+          Positioned(
+            top: 84,
+            left: 16,
+            right: 16,
+            child: Material(
+              color: surface,
+              borderRadius: BorderRadius.circular(16),
+              child: _isLoadingSuggestions
+                  ? const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(
+                        child: CircularProgressIndicator(color: purple),
+                      ),
+                    )
+                  : ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 280),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        padding: EdgeInsets.zero,
+                        itemCount: _placeSuggestions.length,
+                        itemBuilder: (context, index) {
+                          final suggestion = _placeSuggestions[index];
+                          return ListTile(
+                            title: Text(
+                              suggestion['place_name'] as String? ?? '',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: textColor),
+                            ),
+                            onTap: () {
+                              final String placeName =
+                                  suggestion['place_name'] as String;
+                              _searchController.text = placeName;
+                              setState(() {
+                                _placeSuggestions = [];
+                                _isLoadingSuggestions = false;
+                              });
+                              _searchPlace(placeName);
+                            },
+                          );
+                        },
+                      ),
+                    ),
+            ),
+          ),
         DraggableScrollableSheet(
           initialChildSize: 0.3,
           minChildSize: 0.27,
@@ -639,6 +769,7 @@ class _SearchProfileBar extends StatelessWidget {
     required this.controller,
     required this.isSearching,
     required this.onSearch,
+    required this.onTextChanged,
     required this.isDarkMode,
     required this.onThemeToggle,
     required this.onProfileTap,
@@ -647,6 +778,7 @@ class _SearchProfileBar extends StatelessWidget {
   final TextEditingController controller;
   final bool isSearching;
   final ValueChanged<String> onSearch;
+  final ValueChanged<String> onTextChanged;
   final bool isDarkMode;
   final VoidCallback onThemeToggle;
   final VoidCallback onProfileTap;
@@ -683,6 +815,7 @@ class _SearchProfileBar extends StatelessWidget {
           Expanded(
             child: TextField(
               controller: controller,
+              onChanged: onTextChanged,
               textInputAction: TextInputAction.search,
               onSubmitted: onSearch,
               style: const TextStyle(
