@@ -1185,7 +1185,7 @@ class _MapPageState extends State<MapPage> {
             ),
           ),
         DraggableScrollableSheet(
-<<          initialChildSize: _activeRoutePlan != null
+          initialChildSize: _activeRoutePlan != null
               ? (_isNavigating ? 0.35 : 0.41)
               : (_searchedName == null ? 0.3 : 0.31),
           minChildSize: _activeRoutePlan != null
