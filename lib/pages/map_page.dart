@@ -12,6 +12,9 @@ import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
 import 'package:share_plus/share_plus.dart';
 
 import 'place_search_service.dart';
+import 'track_shipment_page.dart';
+import 'truck_registration_page.dart';
+import 'warehouse_page.dart';
 import 'profile_menu.dart';
 import 'route_calculation_service.dart';
 import 'route_planning_page.dart';
@@ -696,18 +699,10 @@ class _MapPageState extends State<MapPage> {
         reverseDuration: Duration(milliseconds: 320),
       ),
       builder: (sheetContext) => _MapMenuSheet(
-        onAddWarehouse: () => _closeMenuWithMessage(
-          sheetContext,
-          'Add Warehouse is coming soon.',
-        ),
-        onTruckRegistration: () => _closeMenuWithMessage(
-          sheetContext,
-          'Truck Registration is coming soon.',
-        ),
-        onTrackShipment: () => _closeMenuWithMessage(
-          sheetContext,
-          'Track Shipment is coming soon.',
-        ),
+        onWarehouse: () =>
+            _closeMenuWithPage(sheetContext, const WarehousePage()),
+        onTruckRegistration: () =>
+            _closeMenuWithPage(sheetContext, const TruckRegistrationPage()),
         onAbout: () => _closeMenuWithAction(sheetContext, _showAbout),
       ),
     );
@@ -718,14 +713,14 @@ class _MapPageState extends State<MapPage> {
         .push(MaterialPageRoute<void>(builder: (_) => const ProfileMenu()));
   }
 
+  void _closeMenuWithPage(BuildContext sheetContext, Widget page) {
+    Navigator.pop(sheetContext);
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+
   void _closeMenuWithAction(BuildContext sheetContext, VoidCallback action) {
     Navigator.pop(sheetContext);
     action();
-  }
-
-  void _closeMenuWithMessage(BuildContext sheetContext, String message) {
-    Navigator.pop(sheetContext);
-    _showMessage(message);
   }
 
   void _showAbout() {
@@ -757,6 +752,7 @@ class _MapPageState extends State<MapPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: background,
+      resizeToAvoidBottomInset: false,
       body: SafeArea(child: _buildBody()),
     );
   }
@@ -911,6 +907,13 @@ class _MapPageState extends State<MapPage> {
             return _ProjectPanel(
               scrollController: scrollController,
               onAction: _showMessage,
+              onTrackDelivery: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const TrackShipmentPage(),
+                  ),
+                );
+              },
             );
           },
         ),
@@ -1203,15 +1206,13 @@ class _FloatingMapButton extends StatelessWidget {
 
 class _MapMenuSheet extends StatelessWidget {
   const _MapMenuSheet({
-    required this.onAddWarehouse,
+    required this.onWarehouse,
     required this.onTruckRegistration,
-    required this.onTrackShipment,
     required this.onAbout,
   });
 
-  final VoidCallback onAddWarehouse;
+  final VoidCallback onWarehouse;
   final VoidCallback onTruckRegistration;
-  final VoidCallback onTrackShipment;
   final VoidCallback onAbout;
 
   @override
@@ -1222,62 +1223,59 @@ class _MapMenuSheet extends StatelessWidget {
         color: background,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 38,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: borderColor,
-                  borderRadius: BorderRadius.circular(4),
+      child: Material(
+        color: Colors.transparent,
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: borderColor,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 22),
-            const Text(
-              'Quick actions',
-              style: TextStyle(
-                color: textColor,
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
+              const SizedBox(height: 22),
+              const Text(
+                'Quick actions',
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-            const SizedBox(height: 5),
-            const Text(
-              'Manage warehouses, trucks and deliveries',
-              style: TextStyle(color: mutedColor, fontSize: 14),
-            ),
-            const SizedBox(height: 18),
-            _MenuAction(
-              icon: Icons.warehouse_rounded,
-              title: 'Add Warehouse',
-              subtitle: 'Add a warehouse location',
-              onTap: onAddWarehouse,
-            ),
-            _MenuAction(
-              icon: Icons.local_shipping_rounded,
-              title: 'Truck Registration',
-              subtitle: 'Register a truck to your fleet',
-              onTap: onTruckRegistration,
-            ),
-            _MenuAction(
-              icon: Icons.inventory_2_rounded,
-              title: 'Track Shipment',
-              subtitle: 'Follow a shipment on its route',
-              onTap: onTrackShipment,
-            ),
-            _MenuAction(
-              icon: Icons.info_outline_rounded,
-              title: 'About BetterRoutes',
-              subtitle: 'App and map information',
-              onTap: onAbout,
-            ),
-          ],
+              const SizedBox(height: 5),
+              const Text(
+                'Manage warehouses, trucks and deliveries',
+                style: TextStyle(color: mutedColor, fontSize: 14),
+              ),
+              const SizedBox(height: 18),
+              _MenuAction(
+                icon: Icons.warehouse_rounded,
+                title: 'Warehouse',
+                subtitle: 'Register and manage warehouses',
+                onTap: onWarehouse,
+              ),
+              _MenuAction(
+                icon: Icons.local_shipping_rounded,
+                title: 'Truck Registration',
+                subtitle: 'Register a truck or driver',
+                onTap: onTruckRegistration,
+              ),
+              _MenuAction(
+                icon: Icons.info_outline_rounded,
+                title: 'About BetterRoutes',
+                subtitle: 'App and map information',
+                onTap: onAbout,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1598,10 +1596,15 @@ class _PlaceDetailRow extends StatelessWidget {
 }
 
 class _ProjectPanel extends StatelessWidget {
-  const _ProjectPanel({required this.scrollController, required this.onAction});
+  const _ProjectPanel({
+    required this.scrollController,
+    required this.onAction,
+    required this.onTrackDelivery,
+  });
 
   final ScrollController scrollController;
   final ValueChanged<String> onAction;
+  final VoidCallback onTrackDelivery;
 
   @override
   Widget build(BuildContext context) {
@@ -1618,92 +1621,98 @@ class _ProjectPanel extends StatelessWidget {
           ),
         ],
       ),
-      child: CustomScrollView(
-        controller: scrollController,
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-              child: Column(
-                children: [
-                  Container(
-                    width: 42,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: borderColor,
-                      borderRadius: BorderRadius.circular(5),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  const Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Plan your journey',
-                              style: TextStyle(
-                                color: textColor,
-                                fontSize: 22,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            SizedBox(height: 5),
-                            Text(
-                              'Everything you need for a better route.',
-                              style: TextStyle(color: mutedColor, fontSize: 14),
-                            ),
-                          ],
-                        ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        child: CustomScrollView(
+          controller: scrollController,
+          physics: const ClampingScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: borderColor,
+                        borderRadius: BorderRadius.circular(5),
                       ),
-                      Icon(Icons.route_rounded, color: purple, size: 30),
-                    ],
+                    ),
+                    const SizedBox(height: 20),
+                    const Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Plan your journey',
+                                style: TextStyle(
+                                  color: textColor,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              SizedBox(height: 5),
+                              Text(
+                                'Everything you need for a better route.',
+                                style: TextStyle(
+                                  color: mutedColor,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(Icons.route_rounded, color: purple, size: 30),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 120),
+              sliver: SliverGrid(
+                delegate: SliverChildListDelegate([
+                  _ProjectActionCard(
+                    icon: Icons.route_rounded,
+                    title: 'Plan a route',
+                    subtitle: 'Find the best way to go',
+                    onTap: () => onAction('Route planning is coming soon.'),
                   ),
-                  const SizedBox(height: 20),
-                ],
+                  _ProjectActionCard(
+                    icon: Icons.bookmark_border_rounded,
+                    title: 'Saved places',
+                    subtitle: 'Keep favourite destinations',
+                    onTap: () => onAction('Saved places are coming soon.'),
+                  ),
+                  _ProjectActionCard(
+                    icon: Icons.local_shipping_outlined,
+                    title: 'Track delivery',
+                    subtitle: 'Follow a shipment live',
+                    onTap: onTrackDelivery,
+                  ),
+                  _ProjectActionCard(
+                    icon: Icons.history_rounded,
+                    title: 'Recent searches',
+                    subtitle: 'Return to a previous place',
+                    onTap: () => onAction('Recent searches are coming soon.'),
+                  ),
+                ]),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: 1.45,
+                ),
               ),
             ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 120),
-            sliver: SliverGrid(
-              delegate: SliverChildListDelegate([
-                _ProjectActionCard(
-                  icon: Icons.route_rounded,
-                  title: 'Plan a route',
-                  subtitle: 'Find the best way to go',
-                  onTap: () => onAction('Route planning is coming soon.'),
-                ),
-                _ProjectActionCard(
-                  icon: Icons.bookmark_border_rounded,
-                  title: 'Saved places',
-                  subtitle: 'Keep favourite destinations',
-                  onTap: () => onAction('Saved places are coming soon.'),
-                ),
-                _ProjectActionCard(
-                  icon: Icons.local_shipping_outlined,
-                  title: 'Track delivery',
-                  subtitle: 'Follow a shipment live',
-                  onTap: () => onAction('Delivery tracking is coming soon.'),
-                ),
-                _ProjectActionCard(
-                  icon: Icons.history_rounded,
-                  title: 'Recent searches',
-                  subtitle: 'Return to a previous place',
-                  onTap: () => onAction('Recent searches are coming soon.'),
-                ),
-              ]),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                childAspectRatio: 1.45,
-              ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

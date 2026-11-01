@@ -197,7 +197,7 @@ class _SplashScreenState extends State<SplashScreen>
                             const SizedBox(height: 10),
 
                             const Text(
-                              'Better Journey',
+                              'Better Routes',
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 color: Colors.white,
