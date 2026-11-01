@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:better_routes/pages/place_search_service.dart';
+import 'package:better_routes/pages/route_calculation_service.dart';
 import 'package:better_routes/pages/route_planning_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,86 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 void main() {
+  testWidgets('Find Route returns the calculated route set to its caller', (
+    WidgetTester tester,
+  ) async {
+    final MockClient client = MockClient((request) async {
+      expect(request.url.path, contains('/route/v1/driving/75.7,26.9;75.8,27'));
+      return http.Response(
+        jsonEncode({
+          'code': 'Ok',
+          'routes': [
+            {
+              'distance': 1000,
+              'duration': 120,
+              'geometry': {
+                'type': 'LineString',
+                'coordinates': [
+                  [75.7, 26.9],
+                  [75.8, 27.0],
+                ],
+              },
+            },
+          ],
+        }),
+        200,
+      );
+    });
+    final RouteCalculationService routeService = RouteCalculationService(
+      client: client,
+    );
+    RoutePlanResult? calculatedPlan;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                calculatedPlan = await Navigator.of(context)
+                    .push<RoutePlanResult>(
+                      MaterialPageRoute<RoutePlanResult>(
+                        builder: (_) => RoutePlanningPage(
+                          startingLocation: _place(
+                            name: 'Start',
+                            latitude: 26.9,
+                            longitude: 75.7,
+                          ),
+                          destination: _place(
+                            name: 'End',
+                            latitude: 27,
+                            longitude: 75.8,
+                          ),
+                          routeCalculationService: routeService,
+                        ),
+                      ),
+                    );
+              },
+              child: const Text('Open planner'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open planner'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('SETUP'), findsNothing);
+    await tester.drag(find.byType(ListView).last, const Offset(0, -700));
+    await tester.pumpAndSettle();
+    expect(find.text('Find Route'), findsOneWidget);
+    await tester.tap(find.text('Find Route'));
+    await tester.pumpAndSettle();
+
+    expect(calculatedPlan, isNotNull);
+    expect(calculatedPlan!.routes, hasLength(1));
+    expect(calculatedPlan!.from.latitude, 26.9);
+    expect(calculatedPlan!.to.longitude, 75.8);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    client.close();
+  });
+
   testWidgets('supports suggestions for both fields and swaps locations', (
     WidgetTester tester,
   ) async {

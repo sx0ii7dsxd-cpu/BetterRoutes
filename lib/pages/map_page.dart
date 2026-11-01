@@ -13,6 +13,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'place_search_service.dart';
 import 'profile_menu.dart';
+import 'route_calculation_service.dart';
 import 'route_planning_page.dart';
 
 const Color background = Color(0xFF17131F);
@@ -59,6 +60,7 @@ class _MapPageState extends State<MapPage> {
   maplibre.LatLng? _searchedLocation;
   String? _searchedName;
   String? _searchedAddress;
+  RoutePlanResult? _activeRoutePlan;
   DateTime? _lastSearchTime;
   bool _busy = false;
   bool _isSearching = false;
@@ -424,32 +426,141 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  void _openRoutePlanner() {
+  Future<void> _openRoutePlanner() async {
     final String? destinationName = _searchedName;
     if (destinationName == null || _searchedLocation == null) return;
 
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => RoutePlanningPage(
-          startingLocation: _position == null
-              ? null
-              : PlaceSearchResult(
-                  name: 'Current location',
-                  displayName: 'Current location',
-                  latitude: _position!.latitude,
-                  longitude: _position!.longitude,
-                ),
-          destination: PlaceSearchResult(
-            name: destinationName,
-            displayName: destinationName,
-            address: _searchedAddress,
-            latitude: _searchedLocation!.latitude,
-            longitude: _searchedLocation!.longitude,
+    final RoutePlanResult? result = await Navigator.of(context)
+        .push<RoutePlanResult>(
+          MaterialPageRoute<RoutePlanResult>(
+            builder: (_) => RoutePlanningPage(
+              startingLocation: _position == null
+                  ? null
+                  : PlaceSearchResult(
+                      name: 'Current location',
+                      displayName: 'Current location',
+                      latitude: _position!.latitude,
+                      longitude: _position!.longitude,
+                    ),
+              destination: PlaceSearchResult(
+                name: destinationName,
+                displayName: destinationName,
+                address: _searchedAddress,
+                latitude: _searchedLocation!.latitude,
+                longitude: _searchedLocation!.longitude,
+              ),
+              placeSearchService: _placeSearchService,
+            ),
           ),
-          placeSearchService: _placeSearchService,
+        );
+    if (!mounted || result == null) return;
+    await _showRoutePlan(result);
+  }
+
+  Future<void> _showRoutePlan(RoutePlanResult result) async {
+    setState(() => _activeRoutePlan = result);
+
+    if (_isMapLibreActive) {
+      if (_mapStyleLoaded) {
+        await _renderMapLibreRoute(result);
+      }
+    } else {
+      _fitLegacyRouteCamera(result.routes.first);
+    }
+
+    if (mounted) {
+      _showMessage(
+        '${result.routes.length} route${result.routes.length == 1 ? '' : 's'} found.',
+      );
+    }
+  }
+
+  Future<void> _renderMapLibreRoute(RoutePlanResult plan) async {
+    final maplibre.MapLibreMapController? controller = _mapLibreController;
+    if (controller == null || !_mapStyleLoaded) return;
+
+    try {
+      await controller.clearLines();
+      final List<maplibre.LineOptions> lines = [
+        for (final (index, route) in plan.routes.indexed)
+          maplibre.LineOptions(
+            geometry: [
+              for (final point in route.geometry)
+                maplibre.LatLng(point.latitude, point.longitude),
+            ],
+            lineColor: index == 0 ? '#B39DDB' : '#8A8298',
+            lineOpacity: index == 0 ? 1 : 0.72,
+            lineWidth: index == 0 ? 7 : 4,
+            lineJoin: 'round',
+          ),
+      ];
+      await controller.addLines(lines);
+      await _refreshMapAnnotations();
+      await controller.animateCamera(
+        maplibre.CameraUpdate.newLatLngBounds(
+          _mapLibreRouteBounds(plan.routes.first),
+          left: 44,
+          top: 105,
+          right: 44,
+          bottom: 320,
         ),
-      ),
+      );
+    } on PlatformException {
+      _fallbackToLegacyMap(
+        'Could not draw the route on the custom map. Showing the standard map.',
+      );
+      _fitLegacyRouteCamera(plan.routes.first);
+    } on StateError {
+      _fallbackToLegacyMap(
+        'The custom map is not ready to draw the route. Showing the standard map.',
+      );
+      _fitLegacyRouteCamera(plan.routes.first);
+    }
+  }
+
+  maplibre.LatLngBounds _mapLibreRouteBounds(OsrmRoute route) {
+    final List<RouteCoordinate> points = route.geometry;
+    double west = points
+        .map((point) => point.longitude)
+        .reduce((a, b) => a < b ? a : b);
+    double east = points
+        .map((point) => point.longitude)
+        .reduce((a, b) => a > b ? a : b);
+    double south = points
+        .map((point) => point.latitude)
+        .reduce((a, b) => a < b ? a : b);
+    double north = points
+        .map((point) => point.latitude)
+        .reduce((a, b) => a > b ? a : b);
+    if (west == east) {
+      west = (west - 0.001).clamp(-180, 180).toDouble();
+      east = (east + 0.001).clamp(-180, 180).toDouble();
+    }
+    if (south == north) {
+      south = (south - 0.001).clamp(-90, 90).toDouble();
+      north = (north + 0.001).clamp(-90, 90).toDouble();
+    }
+    return maplibre.LatLngBounds(
+      southwest: maplibre.LatLng(south, west),
+      northeast: maplibre.LatLng(north, east),
     );
+  }
+
+  void _fitLegacyRouteCamera(OsrmRoute route) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final List<latlong.LatLng> points = [
+        for (final point in route.geometry)
+          latlong.LatLng(point.latitude, point.longitude),
+      ];
+      if (points.length < 2) return;
+      _legacyMapController.fitCamera(
+        legacy.CameraFit.coordinates(
+          coordinates: points,
+          padding: const EdgeInsets.fromLTRB(44, 105, 44, 320),
+        ),
+      );
+    });
   }
 
   Future<void> _moveMapLibreCamera(maplibre.LatLng target, double zoom) async {
@@ -474,10 +585,15 @@ class _MapPageState extends State<MapPage> {
   void _onMapLibreStyleLoaded() {
     _mapLibreLoadTimer?.cancel();
     _mapStyleLoaded = true;
-    unawaited(_refreshMapAnnotations());
-    final maplibre.LatLng? searchedLocation = _searchedLocation;
-    if (searchedLocation != null) {
-      unawaited(_moveMapLibreCamera(searchedLocation, 15));
+    final RoutePlanResult? routePlan = _activeRoutePlan;
+    if (routePlan != null) {
+      unawaited(_renderMapLibreRoute(routePlan));
+    } else {
+      unawaited(_refreshMapAnnotations());
+      final maplibre.LatLng? searchedLocation = _searchedLocation;
+      if (searchedLocation != null) {
+        unawaited(_moveMapLibreCamera(searchedLocation, 15));
+      }
     }
   }
 
@@ -534,6 +650,31 @@ class _MapPageState extends State<MapPage> {
             circleStrokeColor: '#FFFFFF',
           ),
         );
+      }
+      final RoutePlanResult? routePlan = _activeRoutePlan;
+      if (routePlan != null) {
+        circles.addAll([
+          maplibre.CircleOptions(
+            geometry: maplibre.LatLng(
+              routePlan.from.latitude,
+              routePlan.from.longitude,
+            ),
+            circleRadius: 9,
+            circleColor: '#5CC6A3',
+            circleStrokeWidth: 3,
+            circleStrokeColor: '#FFFFFF',
+          ),
+          maplibre.CircleOptions(
+            geometry: maplibre.LatLng(
+              routePlan.to.latitude,
+              routePlan.to.longitude,
+            ),
+            circleRadius: 9,
+            circleColor: '#B39DDB',
+            circleStrokeWidth: 3,
+            circleStrokeColor: '#FFFFFF',
+          ),
+        ]);
       }
       if (circles.isNotEmpty) {
         await controller.addCircles(circles);
@@ -830,8 +971,48 @@ class _MapPageState extends State<MapPage> {
                 height: 54,
                 child: const Icon(Icons.location_pin, color: purple, size: 48),
               ),
+            if (_activeRoutePlan case final RoutePlanResult routePlan) ...[
+              legacy.Marker(
+                point: latlong.LatLng(
+                  routePlan.from.latitude,
+                  routePlan.from.longitude,
+                ),
+                width: 30,
+                height: 30,
+                child: const Icon(
+                  Icons.trip_origin_rounded,
+                  color: Color(0xFF5CC6A3),
+                  size: 25,
+                ),
+              ),
+              legacy.Marker(
+                point: latlong.LatLng(
+                  routePlan.to.latitude,
+                  routePlan.to.longitude,
+                ),
+                width: 42,
+                height: 48,
+                child: const Icon(Icons.location_pin, color: purple, size: 42),
+              ),
+            ],
           ],
         ),
+        if (_activeRoutePlan case final RoutePlanResult routePlan)
+          legacy.PolylineLayer(
+            polylines: [
+              for (final (index, route) in routePlan.routes.indexed)
+                legacy.Polyline(
+                  points: [
+                    for (final point in route.geometry)
+                      latlong.LatLng(point.latitude, point.longitude),
+                  ],
+                  color: index == 0
+                      ? purple
+                      : const Color(0xFF8A8298).withValues(alpha: 0.72),
+                  strokeWidth: index == 0 ? 7 : 4,
+                ),
+            ],
+          ),
         const legacy.RichAttributionWidget(
           attributions: [
             legacy.TextSourceAttribution('© OpenStreetMap contributors'),

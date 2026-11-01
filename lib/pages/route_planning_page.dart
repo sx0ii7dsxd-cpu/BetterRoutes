@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import 'route_calculation_service.dart';
 import 'place_search_service.dart';
 
 const Color _background = Color(0xFF17131F);
@@ -18,12 +19,14 @@ class RoutePlanningPage extends StatefulWidget {
     required this.startingLocation,
     required this.destination,
     this.placeSearchService,
+    this.routeCalculationService,
     super.key,
   });
 
   final PlaceSearchResult? startingLocation;
   final PlaceSearchResult destination;
   final PlaceSearchService? placeSearchService;
+  final RouteCalculationService? routeCalculationService;
 
   @override
   State<RoutePlanningPage> createState() => _RoutePlanningPageState();
@@ -34,6 +37,8 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
   late final TextEditingController _toController;
   late final PlaceSearchService _placeSearchService;
   late final bool _ownsPlaceSearchService;
+  late final RouteCalculationService _routeCalculationService;
+  late final bool _ownsRouteCalculationService;
   PlaceSearchResult? _fromLocation;
   PlaceSearchResult? _toLocation;
   _RouteField? _activeField;
@@ -41,6 +46,7 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
   Timer? _suggestionDebounce;
   int _suggestionGeneration = 0;
   bool _isLoadingSuggestions = false;
+  bool _isCalculatingRoute = false;
   bool _hasSearchedQuery = false;
   String? _suggestionMessage;
 
@@ -57,12 +63,16 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
     _placeSearchService =
         widget.placeSearchService ??
         PlaceSearchService(apiKey: PlaceSearchService.configuredApiKey);
+    _ownsRouteCalculationService = widget.routeCalculationService == null;
+    _routeCalculationService =
+        widget.routeCalculationService ?? RouteCalculationService();
   }
 
   @override
   void dispose() {
     _suggestionDebounce?.cancel();
     if (_ownsPlaceSearchService) _placeSearchService.dispose();
+    if (_ownsRouteCalculationService) _routeCalculationService.dispose();
     _fromController.dispose();
     _toController.dispose();
     _fromFocusNode.dispose();
@@ -247,13 +257,35 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
     FocusScope.of(context).unfocus();
   }
 
-  void _showRouteNotReady() {
+  Future<void> _findRoute() async {
     if (_activeField != null) _hideSuggestions();
+    final PlaceSearchResult? from = _fromLocation;
+    final PlaceSearchResult? to = _toLocation;
+    if (from == null || to == null) {
+      _showMessage('Choose both locations from the suggestions first.');
+      return;
+    }
+
+    setState(() => _isCalculatingRoute = true);
+    try {
+      final List<OsrmRoute> routes = await _routeCalculationService.calculate(
+        from: from,
+        to: to,
+      );
+      if (!mounted) return;
+      Navigator.of(context)
+          .pop(RoutePlanResult(from: from, to: to, routes: routes));
+    } on RouteCalculationException catch (error) {
+      _showMessage(error.message);
+    } finally {
+      if (mounted) setState(() => _isCalculatingRoute = false);
+    }
+  }
+
+  void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Text(
-          'Route calculation will be added in a later stage.',
-        ),
+        content: Text(message),
         behavior: SnackBarBehavior.floating,
         backgroundColor: _surfaceRaised,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -312,7 +344,7 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
               SizedBox(
                 height: 58,
                 child: FilledButton.icon(
-                  onPressed: _showRouteNotReady,
+                  onPressed: _isCalculatingRoute ? null : _findRoute,
                   style: FilledButton.styleFrom(
                     backgroundColor: _amethyst,
                     foregroundColor: _background,
@@ -325,21 +357,22 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
                       letterSpacing: 0.2,
                     ),
                   ),
-                  icon: const Icon(Icons.route_rounded, size: 21),
-                  label: const Text('Find Route'),
-                ),
-              ),
-              const SizedBox(height: 13),
-              const Center(
-                child: Text(
-                  'Route preview is coming soon',
-                  style: TextStyle(
-                    color: _muted,
-                    fontSize: 12,
-                    letterSpacing: 0.2,
+                  icon: _isCalculatingRoute
+                      ? const SizedBox(
+                          width: 19,
+                          height: 19,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: _background,
+                          ),
+                        )
+                      : const Icon(Icons.route_rounded, size: 21),
+                  label: Text(
+                    _isCalculatingRoute ? 'Finding route...' : 'Find Route',
                   ),
                 ),
               ),
+              const SizedBox(height: 13),
             ],
           ),
         ),
@@ -382,29 +415,6 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
             ],
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-          decoration: BoxDecoration(
-            color: _amethyst.withValues(alpha: 0.09),
-            border: Border.all(color: _amethyst.withValues(alpha: 0.25)),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.circle, size: 7, color: _amethyst),
-              SizedBox(width: 7),
-              Text(
-                'SETUP',
-                style: TextStyle(
-                  color: _amethyst,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1,
-                ),
-              ),
-            ],
-          ),
-        ),
       ],
     );
   }
@@ -427,23 +437,25 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
       child: Column(
         children: [
           _buildLocationField(_RouteField.from),
-          Padding(
-            padding: const EdgeInsets.only(left: 23, right: 3),
-            child: Row(
+          SizedBox(
+            height: 68,
+            child: Stack(
+              alignment: Alignment.center,
               children: [
-                Container(
-                  width: 1,
-                  height: 25,
-                  color: _amethyst.withValues(alpha: 0.5),
+                Positioned(
+                  left: 23,
+                  top: 0,
+                  bottom: 0,
+                  child: Container(width: 1, color: _border),
                 ),
-                const SizedBox(width: 17),
-                Expanded(child: Container(height: 1, color: _border)),
-                const SizedBox(width: 10),
-                _PlannerIconButton(
-                  icon: Icons.swap_vert_rounded,
-                  tooltip: 'Swap starting point and destination',
-                  onPressed: _swapLocations,
-                  accent: _amethyst,
+                Positioned(
+                  right: 3,
+                  child: _PlannerIconButton(
+                    icon: Icons.swap_vert_rounded,
+                    tooltip: 'Swap starting point and destination',
+                    onPressed: _swapLocations,
+                    accent: _amethyst,
+                  ),
                 ),
               ],
             ),
@@ -636,107 +648,115 @@ class _LocationInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(13, 12, 12, 10),
-      decoration: BoxDecoration(
-        color: _surfaceRaised.withValues(alpha: 0.68),
-        border: Border.all(color: _border.withValues(alpha: 0.9)),
-        borderRadius: BorderRadius.circular(17),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 18),
-            child: Icon(icon, size: 19, color: accent),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: _muted,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.35,
-                  ),
-                ),
-                TextField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  textInputAction: textInputAction,
-                  onTap: onTap,
-                  onChanged: onChanged,
-                  style: const TextStyle(
-                    color: _text,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    hintText: hint,
-                    hintStyle: const TextStyle(
+    return SizedBox(
+      height: 100,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(13, 12, 12, 10),
+        decoration: BoxDecoration(
+          color: _surfaceRaised.withValues(alpha: 0.68),
+          border: Border.all(color: _border.withValues(alpha: 0.9)),
+          borderRadius: BorderRadius.circular(17),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 18),
+              child: Icon(icon, size: 19, color: accent),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
                       color: _muted,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w400,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.35,
                     ),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.only(top: 6, bottom: 3),
-                    suffixIconConstraints: const BoxConstraints(
-                      minWidth: 34,
-                      minHeight: 34,
+                  ),
+                  TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    textInputAction: textInputAction,
+                    onTap: onTap,
+                    onChanged: onChanged,
+                    style: const TextStyle(
+                      color: _text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
                     ),
-                    suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: hint,
+                      hintStyle: const TextStyle(
+                        color: _muted,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.only(top: 6, bottom: 3),
+                      suffixIconConstraints: const BoxConstraints(
+                        minWidth: 34,
+                        minHeight: 34,
+                      ),
+                      suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: controller,
+                        builder: (context, value, child) {
+                          if (value.text.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return IconButton(
+                            onPressed: onClear,
+                            tooltip: 'Clear ${label.toLowerCase()} location',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 34,
+                              height: 34,
+                            ),
+                            icon: const Icon(
+                              Icons.close_rounded,
+                              color: _muted,
+                              size: 18,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  if (helperText?.trim().isNotEmpty == true)
+                    ValueListenableBuilder<TextEditingValue>(
                       valueListenable: controller,
                       builder: (context, value, child) {
-                        if (value.text.isEmpty) return const SizedBox.shrink();
-                        return IconButton(
-                          onPressed: onClear,
-                          tooltip: 'Clear ${label.toLowerCase()} location',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints.tightFor(
-                            width: 34,
-                            height: 34,
-                          ),
-                          icon: const Icon(
-                            Icons.close_rounded,
-                            color: _muted,
-                            size: 18,
+                        if (value.text != helperValue) {
+                          return const SizedBox(height: 14);
+                        }
+                        return SizedBox(
+                          height: 14,
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: Text(
+                              helperText!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: _muted,
+                                fontSize: 10,
+                                height: 1.2,
+                              ),
+                            ),
                           ),
                         );
                       },
                     ),
-                  ),
-                ),
-                if (helperText?.trim().isNotEmpty == true)
-                  ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: controller,
-                    builder: (context, value, child) {
-                      if (value.text != helperValue) {
-                        return const SizedBox.shrink();
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                          helperText!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: _muted,
-                            fontSize: 11,
-                            height: 1.35,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
