@@ -61,6 +61,47 @@ void main() {
     },
   );
 
+  test('requests a route through each selected intermediate stop in order', () async {
+    Uri? requestedUri;
+    final MockClient client = MockClient((request) async {
+      requestedUri = request.url;
+      return http.Response(
+        jsonEncode({
+          'code': 'Ok',
+          'routes': [
+            _route(
+              distance: 2400,
+              duration: 360,
+              coordinates: [
+                [75.7, 26.9],
+                [75.75, 26.95],
+                [75.8, 27.0],
+              ],
+            ),
+          ],
+        }),
+        200,
+      );
+    });
+    final RouteCalculationService service = RouteCalculationService(
+      client: client,
+    );
+
+    final List<OsrmRoute> routes = await service.calculate(
+      from: _place(latitude: 26.9, longitude: 75.7),
+      viaStops: [_place(latitude: 26.95, longitude: 75.75)],
+      to: _place(latitude: 27, longitude: 75.8),
+    );
+
+    expect(
+      requestedUri!.path,
+      '/route/v1/driving/75.7,26.9;75.75,26.95;75.8,27.0',
+    );
+    expect(requestedUri!.queryParameters['alternatives'], 'false');
+    expect(routes, hasLength(1));
+    client.close();
+  });
+
   test('reports when OSRM has no route', () async {
     final MockClient client = MockClient(
       (_) async => http.Response('{"code":"NoRoute","routes":[]}', 200),
@@ -120,6 +161,54 @@ void main() {
       );
       client.close();
     }
+  });
+
+  test('keeps valid alternatives when another returned route is malformed', () async {
+    final MockClient client = MockClient(
+      (_) async => http.Response(
+        jsonEncode({
+          'code': 'Ok',
+          'routes': [
+            {
+              ..._route(
+                distance: 1200,
+                duration: 180,
+                coordinates: [
+                  [75.7, 26.9],
+                  [75.8, 27.0],
+                ],
+              ),
+              'legs': [
+                {'summary': 'Central road'},
+              ],
+              'weight_name': 'routability',
+            },
+            _route(
+              distance: 1600,
+              duration: 240,
+              coordinates: [
+                [200, 26.9],
+                [75.9, 27.1],
+              ],
+            ),
+          ],
+        }),
+        200,
+      ),
+    );
+    final RouteCalculationService service = RouteCalculationService(
+      client: client,
+    );
+
+    final List<OsrmRoute> routes = await service.calculate(
+      from: _place(latitude: 26.9, longitude: 75.7),
+      to: _place(latitude: 27.0, longitude: 75.8),
+    );
+
+    expect(routes, hasLength(1));
+    expect(routes.single.roadSummary, 'Central road');
+    expect(routes.single.weightName, 'routability');
+    client.close();
   });
 
   test('rejects invalid input coordinates before requesting OSRM', () async {

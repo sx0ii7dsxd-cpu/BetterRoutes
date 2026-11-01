@@ -18,11 +18,15 @@ class OsrmRoute {
     required this.geometry,
     required this.distanceMeters,
     required this.durationSeconds,
+    this.weightName,
+    this.roadSummary,
   });
 
   final List<RouteCoordinate> geometry;
   final double distanceMeters;
   final double durationSeconds;
+  final String? weightName;
+  final String? roadSummary;
 }
 
 class RoutePlanResult {
@@ -30,10 +34,12 @@ class RoutePlanResult {
     required this.from,
     required this.to,
     required this.routes,
+    this.viaStops = const [],
   });
 
   final PlaceSearchResult from;
   final PlaceSearchResult to;
+  final List<PlaceSearchResult> viaStops;
   final List<OsrmRoute> routes;
 }
 
@@ -59,16 +65,21 @@ class RouteCalculationService {
   Future<List<OsrmRoute>> calculate({
     required PlaceSearchResult from,
     required PlaceSearchResult to,
+    List<PlaceSearchResult> viaStops = const [],
   }) async {
-    _validateCoordinate(from.latitude, from.longitude);
-    _validateCoordinate(to.latitude, to.longitude);
+    final List<PlaceSearchResult> waypoints = [from, ...viaStops, to];
+    for (final PlaceSearchResult waypoint in waypoints) {
+      _validateCoordinate(waypoint.latitude, waypoint.longitude);
+    }
+    final String coordinates = waypoints
+        .map((waypoint) => '${waypoint.longitude},${waypoint.latitude}')
+        .join(';');
 
     final Uri uri = Uri.https(
       _baseUrl,
-      '/route/v1/driving/'
-      '${from.longitude},${from.latitude};${to.longitude},${to.latitude}',
+      '/route/v1/driving/$coordinates',
       {
-        'alternatives': 'true',
+        'alternatives': viaStops.isEmpty ? 'true' : 'false',
         'overview': 'full',
         'geometries': 'geojson',
         'steps': 'false',
@@ -138,12 +149,12 @@ class RouteCalculationService {
     final List<OsrmRoute> routes = [];
     for (final Object? routeValue in routesValue) {
       final OsrmRoute? route = _parseRoute(routeValue);
-      if (route == null) {
-        throw const RouteCalculationException(
-          'The routing service returned invalid route geometry.',
-        );
-      }
-      routes.add(route);
+      if (route != null) routes.add(route);
+    }
+    if (routes.isEmpty) {
+      throw const RouteCalculationException(
+        'The routing service returned no valid route geometry.',
+      );
     }
     return List<OsrmRoute>.unmodifiable(routes);
   }
@@ -195,11 +206,28 @@ class RouteCalculationService {
       );
     }
     if (coordinates.length < 2) return null;
+    final Object? weightNameValue = value['weight_name'];
+    final Object? legsValue = value['legs'];
+    final List<String> summaries = [];
+    if (legsValue is List) {
+      for (final Object? leg in legsValue) {
+        if (leg is Map && leg['summary'] is String) {
+          final String summary = (leg['summary'] as String).trim();
+          if (summary.isNotEmpty && !summaries.contains(summary)) {
+            summaries.add(summary);
+          }
+        }
+      }
+    }
 
     return OsrmRoute(
       geometry: List<RouteCoordinate>.unmodifiable(coordinates),
       distanceMeters: distance,
       durationSeconds: duration,
+      weightName: weightNameValue is String && weightNameValue.trim().isNotEmpty
+          ? weightNameValue.trim()
+          : null,
+      roadSummary: summaries.isEmpty ? null : summaries.join(' · '),
     );
   }
 

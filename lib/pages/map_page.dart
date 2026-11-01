@@ -12,12 +12,14 @@ import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
 import 'package:share_plus/share_plus.dart';
 
 import 'place_search_service.dart';
-import 'profile_menu.dart';
-import 'route_calculation_service.dart';
-import 'route_planning_page.dart';
 import 'track_shipment_page.dart';
 import 'truck_registration_page.dart';
 import 'warehouse_page.dart';
+import 'profile_menu.dart';
+import 'route_calculation_service.dart';
+import 'route_navigation_progress.dart';
+import 'route_planning_page.dart';
+import 'route_preview_panel.dart';
 
 const Color background = Color(0xFF17131F);
 const Color purple = Color(0xFFB39DDB);
@@ -64,6 +66,16 @@ class _MapPageState extends State<MapPage> {
   String? _searchedName;
   String? _searchedAddress;
   RoutePlanResult? _activeRoutePlan;
+  int _selectedRouteIndex = 0;
+  bool _isNavigating = false;
+  bool _navigationLocationUnavailable = false;
+  RouteNavigationProgress? _navigationProgress;
+  double _greatestNavigationProgress = 0;
+  StreamSubscription<Position>? _navigationPositionSubscription;
+  bool _isRenderingMapLibreRoute = false;
+  RoutePlanResult? _pendingMapLibreRoute;
+  bool _isRefreshingMapAnnotations = false;
+  bool _refreshMapAnnotationsAgain = false;
   DateTime? _lastSearchTime;
   bool _busy = false;
   bool _isSearching = false;
@@ -93,6 +105,7 @@ class _MapPageState extends State<MapPage> {
   void dispose() {
     _mapLibreLoadTimer?.cancel();
     _suggestionDebounce?.cancel();
+    unawaited(_navigationPositionSubscription?.cancel());
     _legacyMapController.dispose();
     _searchController.dispose();
     _httpClient.close();
@@ -207,7 +220,7 @@ class _MapPageState extends State<MapPage> {
         16,
       );
     }
-    if (_searchedLocation != null) {
+    if (_searchedLocation != null && _activeRoutePlan == null) {
       setState(() {
         _searchedLocation = null;
         _searchedName = null;
@@ -429,29 +442,37 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  Future<void> _openRoutePlanner() async {
-    final String? destinationName = _searchedName;
-    if (destinationName == null || _searchedLocation == null) return;
+  Future<void> _openRoutePlanner({RoutePlanResult? existingPlan}) async {
+    final String? destinationName =
+        existingPlan?.to.displayName ?? _searchedName;
+    final maplibre.LatLng? destinationLocation = existingPlan == null
+        ? _searchedLocation
+        : maplibre.LatLng(existingPlan.to.latitude, existingPlan.to.longitude);
+    if (destinationName == null || destinationLocation == null) return;
+    final PlaceSearchResult? startingLocation =
+        existingPlan?.from ??
+        (_position == null
+            ? null
+            : PlaceSearchResult(
+                name: 'Current location',
+                displayName: 'Current location',
+                latitude: _position!.latitude,
+                longitude: _position!.longitude,
+              ));
 
     final RoutePlanResult? result = await Navigator.of(context)
         .push<RoutePlanResult>(
           MaterialPageRoute<RoutePlanResult>(
             builder: (_) => RoutePlanningPage(
-              startingLocation: _position == null
-                  ? null
-                  : PlaceSearchResult(
-                      name: 'Current location',
-                      displayName: 'Current location',
-                      latitude: _position!.latitude,
-                      longitude: _position!.longitude,
-                    ),
+              startingLocation: startingLocation,
               destination: PlaceSearchResult(
                 name: destinationName,
                 displayName: destinationName,
-                address: _searchedAddress,
-                latitude: _searchedLocation!.latitude,
-                longitude: _searchedLocation!.longitude,
+                address: existingPlan?.to.address ?? _searchedAddress,
+                latitude: destinationLocation.latitude,
+                longitude: destinationLocation.longitude,
               ),
+              viaStops: existingPlan?.viaStops ?? const [],
               placeSearchService: _placeSearchService,
             ),
           ),
@@ -461,7 +482,19 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _showRoutePlan(RoutePlanResult result) async {
-    setState(() => _activeRoutePlan = result);
+    await _stopNavigation();
+    setState(() {
+      _activeRoutePlan = result;
+      _selectedRouteIndex = 0;
+      _navigationProgress = null;
+      _greatestNavigationProgress = 0;
+      _searchedLocation = maplibre.LatLng(
+        result.to.latitude,
+        result.to.longitude,
+      );
+      _searchedName = result.to.displayName;
+      _searchedAddress = result.to.address;
+    });
 
     if (_isMapLibreActive) {
       if (_mapStyleLoaded) {
@@ -479,6 +512,21 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _renderMapLibreRoute(RoutePlanResult plan) async {
+    _pendingMapLibreRoute = plan;
+    if (_isRenderingMapLibreRoute) return;
+    _isRenderingMapLibreRoute = true;
+    try {
+      while (mounted && _pendingMapLibreRoute != null) {
+        final RoutePlanResult nextPlan = _pendingMapLibreRoute!;
+        _pendingMapLibreRoute = null;
+        await _renderMapLibreRouteOnce(nextPlan);
+      }
+    } finally {
+      _isRenderingMapLibreRoute = false;
+    }
+  }
+
+  Future<void> _renderMapLibreRouteOnce(RoutePlanResult plan) async {
     final maplibre.MapLibreMapController? controller = _mapLibreController;
     if (controller == null || !_mapStyleLoaded) return;
 
@@ -486,22 +534,33 @@ class _MapPageState extends State<MapPage> {
       await controller.clearLines();
       final List<maplibre.LineOptions> lines = [
         for (final (index, route) in plan.routes.indexed)
-          maplibre.LineOptions(
-            geometry: [
-              for (final point in route.geometry)
-                maplibre.LatLng(point.latitude, point.longitude),
-            ],
-            lineColor: index == 0 ? '#B39DDB' : '#8A8298',
-            lineOpacity: index == 0 ? 1 : 0.72,
-            lineWidth: index == 0 ? 7 : 4,
-            lineJoin: 'round',
-          ),
+          if (index != _selectedRouteIndex)
+            maplibre.LineOptions(
+              geometry: [
+                for (final point in route.geometry)
+                  maplibre.LatLng(point.latitude, point.longitude),
+              ],
+              lineColor: '#8A8298',
+              lineOpacity: 0.68,
+              lineWidth: 4,
+              lineJoin: 'round',
+            ),
+        maplibre.LineOptions(
+          geometry: [
+            for (final point in plan.routes[_selectedRouteIndex].geometry)
+              maplibre.LatLng(point.latitude, point.longitude),
+          ],
+          lineColor: '#9B82C8',
+          lineOpacity: 1,
+          lineWidth: 8,
+          lineJoin: 'round',
+        ),
       ];
       await controller.addLines(lines);
       await _refreshMapAnnotations();
       await controller.animateCamera(
         maplibre.CameraUpdate.newLatLngBounds(
-          _mapLibreRouteBounds(plan.routes.first),
+          _mapLibreRouteBounds(plan.routes[_selectedRouteIndex]),
           left: 44,
           top: 105,
           right: 44,
@@ -512,13 +571,219 @@ class _MapPageState extends State<MapPage> {
       _fallbackToLegacyMap(
         'Could not draw the route on the custom map. Showing the standard map.',
       );
-      _fitLegacyRouteCamera(plan.routes.first);
+      _fitLegacyRouteCamera(plan.routes[_selectedRouteIndex]);
     } on StateError {
       _fallbackToLegacyMap(
         'The custom map is not ready to draw the route. Showing the standard map.',
       );
-      _fitLegacyRouteCamera(plan.routes.first);
+      _fitLegacyRouteCamera(plan.routes[_selectedRouteIndex]);
     }
+  }
+
+  Future<void> _selectRoute(int index) async {
+    final RoutePlanResult? plan = _activeRoutePlan;
+    if (plan == null || index < 0 || index >= plan.routes.length) return;
+    setState(() {
+      _selectedRouteIndex = index;
+      _navigationProgress = null;
+      _greatestNavigationProgress = 0;
+    });
+    if (_isMapLibreActive) {
+      await _renderMapLibreRoute(plan);
+    } else {
+      _fitLegacyRouteCamera(plan.routes[index]);
+    }
+  }
+
+  Future<bool> _ensureNavigationLocationAccess() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _showNavigationLocationMessage(
+          'Turn on location services to start live navigation.',
+          actionLabel: 'Location settings',
+          onAction: _openLocationSettings,
+        );
+        return false;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.deniedForever) {
+        _showNavigationLocationMessage(
+          'Live navigation needs location access. Allow it in app settings.',
+          actionLabel: 'App settings',
+          onAction: _openAppSettings,
+        );
+        return false;
+      }
+      if (permission != LocationPermission.whileInUse &&
+          permission != LocationPermission.always) {
+        _showNavigationLocationMessage(
+          'Live navigation needs location permission. You can still preview '
+          'the route.',
+          actionLabel: 'Try again',
+          onAction: _startNavigation,
+        );
+        return false;
+      }
+      return true;
+    } on PlatformException {
+      _showMessage('Could not check location permission. Please try again.');
+      return false;
+    } on PermissionDefinitionsNotFoundException {
+      _showMessage('Location permission is not configured for this app build.');
+      return false;
+    } on PermissionRequestInProgressException {
+      _showMessage('A location permission request is already in progress.');
+      return false;
+    }
+  }
+
+  Future<void> _startNavigation() async {
+    final RoutePlanResult? plan = _activeRoutePlan;
+    if (plan == null || !await _ensureNavigationLocationAccess()) return;
+
+    final Position position;
+    try {
+      position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      ).timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      _showMessage(
+        'GPS is temporarily unavailable. Try starting navigation again.',
+      );
+      return;
+    } on LocationServiceDisabledException {
+      _showNavigationLocationMessage(
+        'Turn on location services to start live navigation.',
+        actionLabel: 'Location settings',
+        onAction: _openLocationSettings,
+      );
+      return;
+    } on PermissionDeniedException {
+      _showNavigationLocationMessage(
+        'Live navigation needs location permission. You can still preview '
+        'the route.',
+        actionLabel: 'App settings',
+        onAction: _openAppSettings,
+      );
+      return;
+    } on PermissionDefinitionsNotFoundException {
+      _showMessage('Location permission is not configured for this app build.');
+      return;
+    } on PlatformException {
+      _showMessage(
+        'Could not get your current location. The route is still available '
+        'for preview.',
+      );
+      return;
+    }
+    if (!mounted) return;
+
+    await _navigationPositionSubscription?.cancel();
+    final RouteNavigationProgress initialProgress =
+        RouteNavigationProgress.calculate(
+          route: plan.routes[_selectedRouteIndex],
+          latitude: position.latitude,
+          longitude: position.longitude,
+        );
+    setState(() {
+      _position = position;
+      _isNavigating = true;
+      _navigationLocationUnavailable = false;
+      _greatestNavigationProgress = initialProgress.progressMeters;
+      _navigationProgress = initialProgress;
+    });
+    await _refreshMapAnnotations();
+    _navigationPositionSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
+      ),
+    ).listen(_onNavigationPosition, onError: _onNavigationLocationError);
+  }
+
+  void _onNavigationPosition(Position position) {
+    final RoutePlanResult? plan = _activeRoutePlan;
+    if (!mounted || !_isNavigating || plan == null) return;
+    final RouteNavigationProgress progress = RouteNavigationProgress.calculate(
+      route: plan.routes[_selectedRouteIndex],
+      latitude: position.latitude,
+      longitude: position.longitude,
+      minimumProgressMeters: _greatestNavigationProgress,
+    );
+    _greatestNavigationProgress = progress.progressMeters;
+    setState(() {
+      _position = position;
+      _navigationLocationUnavailable = false;
+      _navigationProgress = RouteNavigationProgress(
+        remainingDistanceMeters: progress.remainingDistanceMeters,
+        remainingDuration: progress.remainingDuration,
+        distanceFromRouteMeters: progress.distanceFromRouteMeters,
+        progressMeters: _greatestNavigationProgress,
+      );
+    });
+    unawaited(_refreshMapAnnotations());
+  }
+
+  void _onNavigationLocationError(Object error, StackTrace stackTrace) {
+    if (!mounted || !_isNavigating) return;
+    setState(() => _navigationLocationUnavailable = true);
+  }
+
+  Future<void> _stopNavigation() async {
+    await _navigationPositionSubscription?.cancel();
+    _navigationPositionSubscription = null;
+    if (mounted) {
+      setState(() {
+        _isNavigating = false;
+        _navigationLocationUnavailable = false;
+        _navigationProgress = null;
+        _greatestNavigationProgress = 0;
+      });
+    }
+  }
+
+  Future<void> _clearRoute() async {
+    await _stopNavigation();
+    setState(() {
+      _activeRoutePlan = null;
+      _selectedRouteIndex = 0;
+      _searchedLocation = null;
+      _searchedName = null;
+      _searchedAddress = null;
+    });
+    final maplibre.MapLibreMapController? controller = _mapLibreController;
+    if (_isMapLibreActive && _mapStyleLoaded && controller != null) {
+      try {
+        await controller.clearLines();
+      } on PlatformException {
+        _fallbackToLegacyMap(
+          'Could not remove the route from the custom map. Showing the standard map.',
+        );
+      }
+      await _refreshMapAnnotations();
+    }
+  }
+
+  void _showNavigationLocationMessage(
+    String message, {
+    required String actionLabel,
+    required VoidCallback onAction,
+  }) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        action: SnackBarAction(label: actionLabel, onPressed: onAction),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: surface,
+      ),
+    );
   }
 
   maplibre.LatLngBounds _mapLibreRouteBounds(OsrmRoute route) {
@@ -623,6 +888,22 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _refreshMapAnnotations() async {
+    if (_isRefreshingMapAnnotations) {
+      _refreshMapAnnotationsAgain = true;
+      return;
+    }
+    _isRefreshingMapAnnotations = true;
+    try {
+      do {
+        _refreshMapAnnotationsAgain = false;
+        await _refreshMapAnnotationsOnce();
+      } while (_refreshMapAnnotationsAgain && mounted);
+    } finally {
+      _isRefreshingMapAnnotations = false;
+    }
+  }
+
+  Future<void> _refreshMapAnnotationsOnce() async {
     if (!_mapStyleLoaded) return;
     final maplibre.MapLibreMapController? controller = _mapLibreController;
     if (controller == null) return;
@@ -643,7 +924,8 @@ class _MapPageState extends State<MapPage> {
         );
       }
       final maplibre.LatLng? searchedLocation = _searchedLocation;
-      if (searchedLocation != null) {
+      final RoutePlanResult? routePlan = _activeRoutePlan;
+      if (searchedLocation != null && routePlan == null) {
         circles.add(
           maplibre.CircleOptions(
             geometry: searchedLocation,
@@ -654,19 +936,36 @@ class _MapPageState extends State<MapPage> {
           ),
         );
       }
-      final RoutePlanResult? routePlan = _activeRoutePlan;
       if (routePlan != null) {
         circles.addAll([
-          maplibre.CircleOptions(
-            geometry: maplibre.LatLng(
-              routePlan.from.latitude,
-              routePlan.from.longitude,
+          for (final stop in routePlan.viaStops)
+            maplibre.CircleOptions(
+              geometry: maplibre.LatLng(stop.latitude, stop.longitude),
+              circleRadius: 8,
+              circleColor: '#B39DDB',
+              circleStrokeWidth: 2,
+              circleStrokeColor: '#FFFFFF',
             ),
-            circleRadius: 9,
-            circleColor: '#5CC6A3',
-            circleStrokeWidth: 3,
-            circleStrokeColor: '#FFFFFF',
-          ),
+        ]);
+        final bool currentLocationIsStart =
+            position != null &&
+            (position.latitude - routePlan.from.latitude).abs() < 0.00001 &&
+            (position.longitude - routePlan.from.longitude).abs() < 0.00001;
+        if (!currentLocationIsStart) {
+          circles.add(
+            maplibre.CircleOptions(
+              geometry: maplibre.LatLng(
+                routePlan.from.latitude,
+                routePlan.from.longitude,
+              ),
+              circleRadius: 9,
+              circleColor: '#5CC6A3',
+              circleStrokeWidth: 3,
+              circleStrokeColor: '#FFFFFF',
+            ),
+          );
+        }
+        circles.add(
           maplibre.CircleOptions(
             geometry: maplibre.LatLng(
               routePlan.to.latitude,
@@ -677,7 +976,7 @@ class _MapPageState extends State<MapPage> {
             circleStrokeWidth: 3,
             circleStrokeColor: '#FFFFFF',
           ),
-        ]);
+        );
       }
       if (circles.isNotEmpty) {
         await controller.addCircles(circles);
@@ -886,16 +1185,50 @@ class _MapPageState extends State<MapPage> {
             ),
           ),
         DraggableScrollableSheet(
-          initialChildSize: 0.3,
-          minChildSize: 0.27,
-          maxChildSize: 0.6,
+<<          initialChildSize: _activeRoutePlan != null
+              ? (_isNavigating ? 0.35 : 0.41)
+              : (_searchedName == null ? 0.3 : 0.31),
+          minChildSize: _activeRoutePlan != null
+              ? 0.28
+              : (_searchedName == null ? 0.27 : 0.26),
+          maxChildSize: _activeRoutePlan != null
+              ? (_isNavigating ? 0.62 : 0.7)
+              : (_searchedName == null ? 0.6 : 0.46),
           snap: true,
-          snapSizes: _searchedName == null
-              ? const [0.3, 0.6]
-              : const [0.31, 0.46],
+          snapSizes: _activeRoutePlan != null
+              ? (_isNavigating ? const [0.35, 0.62] : const [0.41, 0.7])
+              : (_searchedName == null ? const [0.3, 0.6] : const [0.31, 0.46]),
           builder: (context, scrollController) {
             final String? selectedName = _searchedName;
             final maplibre.LatLng? selectedLocation = _searchedLocation;
+            final RoutePlanResult? routePlan = _activeRoutePlan;
+            if (routePlan != null) {
+              return RoutePreviewPanel(
+                scrollController: scrollController,
+                plan: routePlan,
+                selectedRouteIndex: _selectedRouteIndex,
+                isNavigating: _isNavigating,
+                onSelectRoute: (index) => unawaited(_selectRoute(index)),
+                onStartNavigation: () => unawaited(_startNavigation()),
+                onExitNavigation: () => unawaited(_stopNavigation()),
+                onEditStops: () {
+                  final RoutePlanResult currentPlan = routePlan;
+                  unawaited(
+                    _stopNavigation().then((_) {
+                      if (mounted) {
+                        return _openRoutePlanner(existingPlan: currentPlan);
+                      }
+                    }),
+                  );
+                },
+                onClearRoute: () => unawaited(_clearRoute()),
+                remainingDistanceMeters:
+                    _navigationProgress?.remainingDistanceMeters,
+                remainingDuration: _navigationProgress?.remainingDuration,
+                isOffRoute: _navigationProgress?.isOffRoute ?? false,
+                isLocationUnavailable: _navigationLocationUnavailable,
+              );
+            }
             if (selectedName != null && selectedLocation != null) {
               return _SelectedPlacePanel(
                 scrollController: scrollController,
@@ -921,9 +1254,13 @@ class _MapPageState extends State<MapPage> {
         ),
         Positioned(
           right: 18,
-          bottom: _searchedName == null
-              ? 24
-              : MediaQuery.sizeOf(context).height * 0.31 + 16,
+          bottom: _activeRoutePlan != null
+              ? MediaQuery.sizeOf(context).height *
+                        (_isNavigating ? 0.62 : 0.7) +
+                    16
+              : (_searchedName == null
+                    ? 24
+                    : MediaQuery.sizeOf(context).height * 0.31 + 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -969,27 +1306,46 @@ class _MapPageState extends State<MapPage> {
               height: 54,
               child: const _LocationMarker(),
             ),
-            if (_searchedLocation case final maplibre.LatLng place)
+            if (_activeRoutePlan == null && _searchedLocation != null)
               legacy.Marker(
-                point: latlong.LatLng(place.latitude, place.longitude),
+                point: latlong.LatLng(
+                  _searchedLocation!.latitude,
+                  _searchedLocation!.longitude,
+                ),
                 width: 48,
                 height: 54,
                 child: const Icon(Icons.location_pin, color: purple, size: 48),
               ),
             if (_activeRoutePlan case final RoutePlanResult routePlan) ...[
-              legacy.Marker(
-                point: latlong.LatLng(
-                  routePlan.from.latitude,
-                  routePlan.from.longitude,
+              for (final stop in routePlan.viaStops)
+                legacy.Marker(
+                  point: latlong.LatLng(stop.latitude, stop.longitude),
+                  width: 34,
+                  height: 34,
+                  child: const Icon(
+                    Icons.stop_circle_rounded,
+                    color: purple,
+                    size: 26,
+                  ),
                 ),
-                width: 30,
-                height: 30,
-                child: const Icon(
-                  Icons.trip_origin_rounded,
-                  color: Color(0xFF5CC6A3),
-                  size: 25,
+              if (!(_position != null &&
+                  (_position!.latitude - routePlan.from.latitude).abs() <
+                      0.00001 &&
+                  (_position!.longitude - routePlan.from.longitude).abs() <
+                      0.00001))
+                legacy.Marker(
+                  point: latlong.LatLng(
+                    routePlan.from.latitude,
+                    routePlan.from.longitude,
+                  ),
+                  width: 30,
+                  height: 30,
+                  child: const Icon(
+                    Icons.trip_origin_rounded,
+                    color: Color(0xFF5CC6A3),
+                    size: 25,
+                  ),
                 ),
-              ),
               legacy.Marker(
                 point: latlong.LatLng(
                   routePlan.to.latitude,
@@ -1006,16 +1362,24 @@ class _MapPageState extends State<MapPage> {
           legacy.PolylineLayer(
             polylines: [
               for (final (index, route) in routePlan.routes.indexed)
-                legacy.Polyline(
-                  points: [
-                    for (final point in route.geometry)
-                      latlong.LatLng(point.latitude, point.longitude),
-                  ],
-                  color: index == 0
-                      ? purple
-                      : const Color(0xFF8A8298).withValues(alpha: 0.72),
-                  strokeWidth: index == 0 ? 7 : 4,
-                ),
+                if (index != _selectedRouteIndex)
+                  legacy.Polyline(
+                    points: [
+                      for (final point in route.geometry)
+                        latlong.LatLng(point.latitude, point.longitude),
+                    ],
+                    color: const Color(0xFF8A8298).withValues(alpha: 0.68),
+                    strokeWidth: 4,
+                  ),
+              legacy.Polyline(
+                points: [
+                  for (final point
+                      in routePlan.routes[_selectedRouteIndex].geometry)
+                    latlong.LatLng(point.latitude, point.longitude),
+                ],
+                color: purple,
+                strokeWidth: 8,
+              ),
             ],
           ),
         const legacy.RichAttributionWidget(
