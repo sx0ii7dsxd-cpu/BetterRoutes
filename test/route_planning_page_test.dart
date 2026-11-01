@@ -77,7 +77,13 @@ void main() {
     await tester.drag(find.byType(ListView).last, const Offset(0, -700));
     await tester.pumpAndSettle();
     expect(find.text('Find Route'), findsOneWidget);
-    await tester.tap(find.text('Find Route'));
+    final Finder findRouteButton = find.widgetWithText(
+      FilledButton,
+      'Find Route',
+    );
+    await tester.ensureVisible(findRouteButton);
+    await tester.pumpAndSettle();
+    await tester.tap(findRouteButton);
     await tester.pumpAndSettle();
 
     expect(calculatedPlan, isNotNull);
@@ -172,6 +178,135 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
     client.close();
+  });
+
+  testWidgets('adds a searchable stop and includes it in OSRM routing', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(430, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final MockClient searchClient = MockClient((request) async {
+      return http.Response(
+        jsonEncode({
+          'features': [
+            {
+              'text': 'Mysuru Palace',
+              'place_name': 'Mysuru Palace, Mysuru, India',
+              'center': [75.75, 26.95],
+            },
+          ],
+        }),
+        200,
+      );
+    });
+    final PlaceSearchService searchService = PlaceSearchService(
+      apiKey: 'test-key',
+      client: searchClient,
+    );
+    Uri? routeUri;
+    final MockClient routeClient = MockClient((request) async {
+      routeUri = request.url;
+      return http.Response(
+        jsonEncode({
+          'code': 'Ok',
+          'routes': [
+            {
+              'distance': 2400,
+              'duration': 360,
+              'geometry': {
+                'type': 'LineString',
+                'coordinates': [
+                  [75.7, 26.9],
+                  [75.75, 26.95],
+                  [75.8, 27.0],
+                ],
+              },
+            },
+          ],
+        }),
+        200,
+      );
+    });
+    final RouteCalculationService routeService = RouteCalculationService(
+      client: routeClient,
+    );
+    RoutePlanResult? calculatedPlan;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                calculatedPlan = await Navigator.of(context)
+                    .push<RoutePlanResult>(
+                      MaterialPageRoute<RoutePlanResult>(
+                        builder: (_) => RoutePlanningPage(
+                          startingLocation: _place(
+                            name: 'Start',
+                            latitude: 26.9,
+                            longitude: 75.7,
+                          ),
+                          destination: _place(
+                            name: 'End',
+                            latitude: 27,
+                            longitude: 75.8,
+                          ),
+                          placeSearchService: searchService,
+                          routeCalculationService: routeService,
+                        ),
+                      ),
+                    );
+              },
+              child: const Text('Open planner'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open planner'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Add new stop'));
+    await tester.pumpAndSettle();
+    expect(find.text('STOP 1'), findsOneWidget);
+    final Finder stopField = find.byType(TextField).at(1);
+    await tester.ensureVisible(stopField);
+    await tester.pumpAndSettle();
+    await tester.enterText(stopField, 'Mysuru Palace');
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+    expect(find.text('Mysuru Palace'), findsWidgets);
+    final Finder suggestion = find.widgetWithText(ListTile, 'Mysuru Palace');
+    await tester.ensureVisible(suggestion);
+    await tester.pumpAndSettle();
+    await tester.tap(suggestion);
+    await tester.pumpAndSettle();
+    expect(find.text('Mysuru Palace, Mysuru, India'), findsOneWidget);
+
+    final Finder findRouteButton = find.widgetWithText(
+      FilledButton,
+      'Find Route',
+    );
+    await tester.ensureVisible(findRouteButton);
+    await tester.pumpAndSettle();
+    await tester.tap(findRouteButton);
+    await tester.pumpAndSettle();
+
+    expect(routeUri!.path, '/route/v1/driving/75.7,26.9;75.75,26.95;75.8,27.0');
+    expect(routeUri!.queryParameters['alternatives'], 'false');
+    expect(calculatedPlan!.viaStops, hasLength(1));
+    expect(
+      calculatedPlan!.viaStops.single.displayName,
+      'Mysuru Palace, Mysuru, India',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    searchClient.close();
+    routeClient.close();
   });
 
   testWidgets('shows an empty-results message and reports search failures', (
