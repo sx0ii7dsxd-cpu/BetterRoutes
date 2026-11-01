@@ -9,11 +9,15 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart' as latlong;
 import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
+import 'package:share_plus/share_plus.dart';
 
+import 'place_search_service.dart';
+import 'profile_menu.dart';
+import 'route_calculation_service.dart';
+import 'route_planning_page.dart';
 import 'track_shipment_page.dart';
 import 'truck_registration_page.dart';
 import 'warehouse_page.dart';
-import 'profile_menu.dart';
 
 const Color background = Color(0xFF17131F);
 const Color purple = Color(0xFFB39DDB);
@@ -34,9 +38,7 @@ enum _LocationState { checking, ready, serviceDisabled, denied, deniedForever }
 class _MapPageState extends State<MapPage> {
   static const String _tileUrl =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-  static const String _mapTilerApiKey = String.fromEnvironment(
-    'MAPTILER_API_KEY',
-  );
+  static const String _mapTilerApiKey = PlaceSearchService.configuredApiKey;
   static const String _mapTilerStyleId = String.fromEnvironment(
     'MAPTILER_STYLE_ID',
     defaultValue: '01a17d04-02f5-792b-8055-66c8af6dad5f',
@@ -46,15 +48,22 @@ class _MapPageState extends State<MapPage> {
   final legacy.MapController _legacyMapController = legacy.MapController();
   final TextEditingController _searchController = TextEditingController();
   final http.Client _httpClient = http.Client();
+  late final PlaceSearchService _placeSearchService = PlaceSearchService(
+    apiKey: _mapTilerApiKey,
+    client: _httpClient,
+  );
   Timer? _suggestionDebounce;
-  List<Map<String, dynamic>> _placeSuggestions = [];
+  List<PlaceSearchResult> _placeSuggestions = [];
   bool _isLoadingSuggestions = false;
+  int _suggestionGeneration = 0;
 
   maplibre.MapLibreMapController? _mapLibreController;
   _LocationState _state = _LocationState.checking;
   Position? _position;
   maplibre.LatLng? _searchedLocation;
   String? _searchedName;
+  String? _searchedAddress;
+  RoutePlanResult? _activeRoutePlan;
   DateTime? _lastSearchTime;
   bool _busy = false;
   bool _isSearching = false;
@@ -202,90 +211,85 @@ class _MapPageState extends State<MapPage> {
       setState(() {
         _searchedLocation = null;
         _searchedName = null;
+        _searchedAddress = null;
       });
     }
   }
 
   void _onSearchTextChanged(String rawQuery) {
     _suggestionDebounce?.cancel();
+    final int generation = ++_suggestionGeneration;
 
     final String query = rawQuery.trim();
 
+    setState(() {
+      _placeSuggestions = [];
+      _isLoadingSuggestions = false;
+    });
+
     if (query.length < 2 || _mapTilerApiKey.trim().isEmpty) {
-      setState(() {
-        _placeSuggestions = [];
-        _isLoadingSuggestions = false;
-      });
       return;
     }
 
     _suggestionDebounce = Timer(
       const Duration(milliseconds: 400),
-      () => _fetchPlaceSuggestions(query),
+      () => _fetchPlaceSuggestions(query, generation),
     );
   }
 
-  Future<void> _fetchPlaceSuggestions(String query) async {
+  void _hideSuggestions() {
+    _suggestionDebounce?.cancel();
+    _suggestionDebounce = null;
+    _suggestionGeneration++;
     if (!mounted) return;
+    setState(() {
+      _placeSuggestions = [];
+      _isLoadingSuggestions = false;
+    });
+  }
+
+  Future<void> _fetchPlaceSuggestions(String query, int generation) async {
+    if (!mounted || generation != _suggestionGeneration) return;
 
     setState(() => _isLoadingSuggestions = true);
 
     try {
-      final Uri uri = Uri.https(
-        'api.maptiler.com',
-        '/geocoding/${Uri.encodeComponent(query)}.json',
-        {
-          'key': _mapTilerApiKey.trim(),
-          'autocomplete': 'true',
-          'limit': '5',
-          'language': 'en',
-        },
-      );
-
-      final response = await _httpClient
-          .get(uri)
-          .timeout(const Duration(seconds: 8));
-
-      if (!mounted) return;
-
-      if (response.statusCode != 200) {
-        setState(() {
-          _placeSuggestions = [];
-          _isLoadingSuggestions = false;
-        });
-        return;
-      }
-
-      final decoded = jsonDecode(response.body);
-      final features = decoded is Map ? decoded['features'] : null;
-
-      final List<Map<String, dynamic>> suggestions = [];
-
-      if (features is List) {
-        for (final item in features) {
-          if (item is Map &&
-              item['center'] is List &&
-              item['place_name'] is String) {
-            suggestions.add(Map<String, dynamic>.from(item));
-          }
-        }
-      }
+      final List<PlaceSearchResult> suggestions = await _placeSearchService
+          .search(
+            query,
+            proximityLatitude: _position?.latitude,
+            proximityLongitude: _position?.longitude,
+          );
+      if (!mounted || generation != _suggestionGeneration) return;
 
       setState(() {
         _placeSuggestions = suggestions;
         _isLoadingSuggestions = false;
       });
-    } catch (_) {
-      if (!mounted) return;
-
+    } catch (error) {
+      if (!mounted || generation != _suggestionGeneration) return;
       setState(() {
         _placeSuggestions = [];
         _isLoadingSuggestions = false;
       });
+      if (error is TimeoutException) {
+        _showMessage('Place suggestions took too long. Please try again.');
+      } else if (error is PlaceSearchException) {
+        _showMessage(error.message);
+      } else if (error is FormatException) {
+        _showMessage('Place search returned invalid results.');
+      } else if (error is http.ClientException) {
+        _showMessage(
+          'Could not connect to place search. Check your connection.',
+        );
+      } else {
+        _showMessage('Could not load place suggestions.');
+      }
     }
   }
 
   Future<void> _searchPlace(String rawQuery) async {
+    _hideSuggestions();
     final String query = rawQuery.trim();
     if (query.isEmpty || _isSearching) return;
 
@@ -338,11 +342,21 @@ class _MapPageState extends State<MapPage> {
       }
 
       final maplibre.LatLng place = maplibre.LatLng(latitude, longitude);
-      final String name = result['display_name'] as String? ?? query;
+      final String? resultName = result['name'] as String?;
+      final String name = resultName?.trim().isNotEmpty == true
+          ? resultName!.trim()
+          : query;
+      final String? displayAddress = result['display_name'] as String?;
+      final String? address =
+          displayAddress?.trim().isNotEmpty == true &&
+              displayAddress!.trim() != name
+          ? displayAddress.trim()
+          : null;
       if (!mounted) return;
       setState(() {
         _searchedLocation = place;
         _searchedName = name;
+        _searchedAddress = address;
       });
       if (_isMapLibreActive) {
         await _moveMapLibreCamera(place, 15);
@@ -377,6 +391,181 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  void _showPlaceDetails() {
+    final String? name = _searchedName;
+    final maplibre.LatLng? location = _searchedLocation;
+    if (name == null || location == null) return;
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _PlaceDetailsSheet(
+        name: name,
+        address: _searchedAddress,
+        location: location,
+      ),
+    );
+  }
+
+  Future<void> _shareSelectedPlace() async {
+    final String? name = _searchedName;
+    final maplibre.LatLng? location = _searchedLocation;
+    if (name == null || location == null) return;
+
+    final Uri mapUri = Uri.https('www.openstreetmap.org', '/', {
+      'mlat': location.latitude.toString(),
+      'mlon': location.longitude.toString(),
+      'zoom': '16',
+    });
+    final String address = _searchedAddress == null
+        ? ''
+        : '\n${_searchedAddress!}';
+    try {
+      await SharePlus.instance.share(
+        ShareParams(text: '$name$address\n$mapUri'),
+      );
+    } on PlatformException {
+      if (mounted) _showMessage('Could not open the share sheet.');
+    }
+  }
+
+  Future<void> _openRoutePlanner() async {
+    final String? destinationName = _searchedName;
+    if (destinationName == null || _searchedLocation == null) return;
+
+    final RoutePlanResult? result = await Navigator.of(context)
+        .push<RoutePlanResult>(
+          MaterialPageRoute<RoutePlanResult>(
+            builder: (_) => RoutePlanningPage(
+              startingLocation: _position == null
+                  ? null
+                  : PlaceSearchResult(
+                      name: 'Current location',
+                      displayName: 'Current location',
+                      latitude: _position!.latitude,
+                      longitude: _position!.longitude,
+                    ),
+              destination: PlaceSearchResult(
+                name: destinationName,
+                displayName: destinationName,
+                address: _searchedAddress,
+                latitude: _searchedLocation!.latitude,
+                longitude: _searchedLocation!.longitude,
+              ),
+              placeSearchService: _placeSearchService,
+            ),
+          ),
+        );
+    if (!mounted || result == null) return;
+    await _showRoutePlan(result);
+  }
+
+  Future<void> _showRoutePlan(RoutePlanResult result) async {
+    setState(() => _activeRoutePlan = result);
+
+    if (_isMapLibreActive) {
+      if (_mapStyleLoaded) {
+        await _renderMapLibreRoute(result);
+      }
+    } else {
+      _fitLegacyRouteCamera(result.routes.first);
+    }
+
+    if (mounted) {
+      _showMessage(
+        '${result.routes.length} route${result.routes.length == 1 ? '' : 's'} found.',
+      );
+    }
+  }
+
+  Future<void> _renderMapLibreRoute(RoutePlanResult plan) async {
+    final maplibre.MapLibreMapController? controller = _mapLibreController;
+    if (controller == null || !_mapStyleLoaded) return;
+
+    try {
+      await controller.clearLines();
+      final List<maplibre.LineOptions> lines = [
+        for (final (index, route) in plan.routes.indexed)
+          maplibre.LineOptions(
+            geometry: [
+              for (final point in route.geometry)
+                maplibre.LatLng(point.latitude, point.longitude),
+            ],
+            lineColor: index == 0 ? '#B39DDB' : '#8A8298',
+            lineOpacity: index == 0 ? 1 : 0.72,
+            lineWidth: index == 0 ? 7 : 4,
+            lineJoin: 'round',
+          ),
+      ];
+      await controller.addLines(lines);
+      await _refreshMapAnnotations();
+      await controller.animateCamera(
+        maplibre.CameraUpdate.newLatLngBounds(
+          _mapLibreRouteBounds(plan.routes.first),
+          left: 44,
+          top: 105,
+          right: 44,
+          bottom: 320,
+        ),
+      );
+    } on PlatformException {
+      _fallbackToLegacyMap(
+        'Could not draw the route on the custom map. Showing the standard map.',
+      );
+      _fitLegacyRouteCamera(plan.routes.first);
+    } on StateError {
+      _fallbackToLegacyMap(
+        'The custom map is not ready to draw the route. Showing the standard map.',
+      );
+      _fitLegacyRouteCamera(plan.routes.first);
+    }
+  }
+
+  maplibre.LatLngBounds _mapLibreRouteBounds(OsrmRoute route) {
+    final List<RouteCoordinate> points = route.geometry;
+    double west = points
+        .map((point) => point.longitude)
+        .reduce((a, b) => a < b ? a : b);
+    double east = points
+        .map((point) => point.longitude)
+        .reduce((a, b) => a > b ? a : b);
+    double south = points
+        .map((point) => point.latitude)
+        .reduce((a, b) => a < b ? a : b);
+    double north = points
+        .map((point) => point.latitude)
+        .reduce((a, b) => a > b ? a : b);
+    if (west == east) {
+      west = (west - 0.001).clamp(-180, 180).toDouble();
+      east = (east + 0.001).clamp(-180, 180).toDouble();
+    }
+    if (south == north) {
+      south = (south - 0.001).clamp(-90, 90).toDouble();
+      north = (north + 0.001).clamp(-90, 90).toDouble();
+    }
+    return maplibre.LatLngBounds(
+      southwest: maplibre.LatLng(south, west),
+      northeast: maplibre.LatLng(north, east),
+    );
+  }
+
+  void _fitLegacyRouteCamera(OsrmRoute route) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final List<latlong.LatLng> points = [
+        for (final point in route.geometry)
+          latlong.LatLng(point.latitude, point.longitude),
+      ];
+      if (points.length < 2) return;
+      _legacyMapController.fitCamera(
+        legacy.CameraFit.coordinates(
+          coordinates: points,
+          padding: const EdgeInsets.fromLTRB(44, 105, 44, 320),
+        ),
+      );
+    });
+  }
+
   Future<void> _moveMapLibreCamera(maplibre.LatLng target, double zoom) async {
     final maplibre.MapLibreMapController? controller = _mapLibreController;
     if (controller == null || !_mapStyleLoaded) return;
@@ -399,10 +588,15 @@ class _MapPageState extends State<MapPage> {
   void _onMapLibreStyleLoaded() {
     _mapLibreLoadTimer?.cancel();
     _mapStyleLoaded = true;
-    unawaited(_refreshMapAnnotations());
-    final maplibre.LatLng? searchedLocation = _searchedLocation;
-    if (searchedLocation != null) {
-      unawaited(_moveMapLibreCamera(searchedLocation, 15));
+    final RoutePlanResult? routePlan = _activeRoutePlan;
+    if (routePlan != null) {
+      unawaited(_renderMapLibreRoute(routePlan));
+    } else {
+      unawaited(_refreshMapAnnotations());
+      final maplibre.LatLng? searchedLocation = _searchedLocation;
+      if (searchedLocation != null) {
+        unawaited(_moveMapLibreCamera(searchedLocation, 15));
+      }
     }
   }
 
@@ -460,6 +654,31 @@ class _MapPageState extends State<MapPage> {
           ),
         );
       }
+      final RoutePlanResult? routePlan = _activeRoutePlan;
+      if (routePlan != null) {
+        circles.addAll([
+          maplibre.CircleOptions(
+            geometry: maplibre.LatLng(
+              routePlan.from.latitude,
+              routePlan.from.longitude,
+            ),
+            circleRadius: 9,
+            circleColor: '#5CC6A3',
+            circleStrokeWidth: 3,
+            circleStrokeColor: '#FFFFFF',
+          ),
+          maplibre.CircleOptions(
+            geometry: maplibre.LatLng(
+              routePlan.to.latitude,
+              routePlan.to.longitude,
+            ),
+            circleRadius: 9,
+            circleColor: '#B39DDB',
+            circleStrokeWidth: 3,
+            circleStrokeColor: '#FFFFFF',
+          ),
+        ]);
+      }
       if (circles.isNotEmpty) {
         await controller.addCircles(circles);
       }
@@ -484,6 +703,8 @@ class _MapPageState extends State<MapPage> {
             _closeMenuWithPage(sheetContext, const WarehousePage()),
         onTruckRegistration: () =>
             _closeMenuWithPage(sheetContext, const TruckRegistrationPage()),
+        onTrackShipment: () =>
+            _closeMenuWithPage(sheetContext, const TrackShipmentPage()),
         onAbout: () => _closeMenuWithAction(sheetContext, _showAbout),
       ),
     );
@@ -646,20 +867,17 @@ class _MapPageState extends State<MapPage> {
                           final suggestion = _placeSuggestions[index];
                           return ListTile(
                             title: Text(
-                              suggestion['place_name'] as String? ?? '',
+                              suggestion.displayName,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(color: textColor),
                             ),
                             onTap: () {
-                              final String placeName =
-                                  suggestion['place_name'] as String;
+                              final String placeName = suggestion.displayName;
                               _searchController.text = placeName;
-                              setState(() {
-                                _placeSuggestions = [];
-                                _isLoadingSuggestions = false;
-                              });
-                              _searchPlace(placeName);
+                              _hideSuggestions();
+                              FocusScope.of(context).unfocus();
+                              unawaited(_searchPlace(placeName));
                             },
                           );
                         },
@@ -669,11 +887,25 @@ class _MapPageState extends State<MapPage> {
           ),
         DraggableScrollableSheet(
           initialChildSize: 0.3,
-          minChildSize: 0.12,
+          minChildSize: 0.27,
           maxChildSize: 0.6,
           snap: true,
-          snapSizes: const [0.3, 0.6],
+          snapSizes: _searchedName == null
+              ? const [0.3, 0.6]
+              : const [0.31, 0.46],
           builder: (context, scrollController) {
+            final String? selectedName = _searchedName;
+            final maplibre.LatLng? selectedLocation = _searchedLocation;
+            if (selectedName != null && selectedLocation != null) {
+              return _SelectedPlacePanel(
+                scrollController: scrollController,
+                name: selectedName,
+                address: _searchedAddress,
+                onDirections: _openRoutePlanner,
+                onShare: _shareSelectedPlace,
+                onDetails: _showPlaceDetails,
+              );
+            }
             return _ProjectPanel(
               scrollController: scrollController,
               onAction: _showMessage,
@@ -687,22 +919,11 @@ class _MapPageState extends State<MapPage> {
             );
           },
         ),
-        if (_searchedName case final String name)
-          Positioned(
-            left: 16,
-            right: 88,
-            bottom: 24,
-            child: _PlaceCard(
-              name: name,
-              onDismiss: () => setState(() {
-                _searchedLocation = null;
-                _searchedName = null;
-              }),
-            ),
-          ),
         Positioned(
           right: 18,
-          bottom: 24,
+          bottom: _searchedName == null
+              ? 24
+              : MediaQuery.sizeOf(context).height * 0.31 + 16,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -755,8 +976,48 @@ class _MapPageState extends State<MapPage> {
                 height: 54,
                 child: const Icon(Icons.location_pin, color: purple, size: 48),
               ),
+            if (_activeRoutePlan case final RoutePlanResult routePlan) ...[
+              legacy.Marker(
+                point: latlong.LatLng(
+                  routePlan.from.latitude,
+                  routePlan.from.longitude,
+                ),
+                width: 30,
+                height: 30,
+                child: const Icon(
+                  Icons.trip_origin_rounded,
+                  color: Color(0xFF5CC6A3),
+                  size: 25,
+                ),
+              ),
+              legacy.Marker(
+                point: latlong.LatLng(
+                  routePlan.to.latitude,
+                  routePlan.to.longitude,
+                ),
+                width: 42,
+                height: 48,
+                child: const Icon(Icons.location_pin, color: purple, size: 42),
+              ),
+            ],
           ],
         ),
+        if (_activeRoutePlan case final RoutePlanResult routePlan)
+          legacy.PolylineLayer(
+            polylines: [
+              for (final (index, route) in routePlan.routes.indexed)
+                legacy.Polyline(
+                  points: [
+                    for (final point in route.geometry)
+                      latlong.LatLng(point.latitude, point.longitude),
+                  ],
+                  color: index == 0
+                      ? purple
+                      : const Color(0xFF8A8298).withValues(alpha: 0.72),
+                  strokeWidth: index == 0 ? 7 : 4,
+                ),
+            ],
+          ),
         const legacy.RichAttributionWidget(
           attributions: [
             legacy.TextSourceAttribution('© OpenStreetMap contributors'),
@@ -945,81 +1206,17 @@ class _FloatingMapButton extends StatelessWidget {
   }
 }
 
-class _PlaceCard extends StatelessWidget {
-  const _PlaceCard({required this.name, required this.onDismiss});
-
-  final String name;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
-      decoration: BoxDecoration(
-        color: surface.withValues(alpha: 0.97),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: borderColor),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.22),
-            blurRadius: 18,
-            offset: const Offset(0, 7),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.place_rounded, color: purple, size: 23),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'SEARCH RESULT',
-                  style: TextStyle(
-                    color: purple,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: textColor,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            onPressed: onDismiss,
-            tooltip: 'Dismiss search result',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.close_rounded, color: mutedColor, size: 20),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _MapMenuSheet extends StatelessWidget {
   const _MapMenuSheet({
     required this.onWarehouse,
     required this.onTruckRegistration,
+    required this.onTrackShipment,
     required this.onAbout,
   });
 
   final VoidCallback onWarehouse;
   final VoidCallback onTruckRegistration;
+  final VoidCallback onTrackShipment;
   final VoidCallback onAbout;
 
   @override
@@ -1076,6 +1273,12 @@ class _MapMenuSheet extends StatelessWidget {
                 onTap: onTruckRegistration,
               ),
               _MenuAction(
+                icon: Icons.track_changes_rounded,
+                title: 'Track Shipment',
+                subtitle: 'Follow a shipment live',
+                onTap: onTrackShipment,
+              ),
+              _MenuAction(
                 icon: Icons.info_outline_rounded,
                 title: 'About BetterRoutes',
                 subtitle: 'App and map information',
@@ -1085,6 +1288,319 @@ class _MapMenuSheet extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SelectedPlacePanel extends StatelessWidget {
+  const _SelectedPlacePanel({
+    required this.scrollController,
+    required this.name,
+    required this.address,
+    required this.onDirections,
+    required this.onShare,
+    required this.onDetails,
+  });
+
+  final ScrollController scrollController;
+  final String name;
+  final String? address;
+  final VoidCallback onDirections;
+  final VoidCallback onShare;
+  final VoidCallback onDetails;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: background.withValues(alpha: 0.98),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border.all(color: borderColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.32),
+            blurRadius: 22,
+            offset: const Offset(0, -6),
+          ),
+        ],
+      ),
+      child: CustomScrollView(
+        controller: scrollController,
+        physics: const BouncingScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 42,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: borderColor,
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 17),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: surface,
+                          borderRadius: BorderRadius.circular(15),
+                          border: Border.all(color: borderColor),
+                        ),
+                        child: const Icon(
+                          Icons.location_on_rounded,
+                          color: purple,
+                          size: 25,
+                        ),
+                      ),
+                      const SizedBox(width: 13),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'SELECTED PLACE',
+                              style: TextStyle(
+                                color: purple,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 1.15,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: textColor,
+                                fontSize: 17,
+                                height: 1.2,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (address != null) ...[
+                    const SizedBox(height: 10),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 59),
+                      child: Text(
+                        address!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: mutedColor,
+                          fontSize: 12,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 17),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _SelectedPlaceActionButton(
+                          icon: Icons.directions_rounded,
+                          label: 'Directions',
+                          onPressed: onDirections,
+                          primary: true,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _SelectedPlaceActionButton(
+                          icon: Icons.ios_share_rounded,
+                          label: 'Share',
+                          onPressed: onShare,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _SelectedPlaceActionButton(
+                          icon: Icons.info_outline_rounded,
+                          label: 'Details',
+                          onPressed: onDetails,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectedPlaceActionButton extends StatelessWidget {
+  const _SelectedPlaceActionButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.primary = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+  final bool primary;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color foreground = primary ? background : textColor;
+    return Material(
+      color: primary ? purple : surface,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          height: 68,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: primary ? null : Border.all(color: borderColor),
+            boxShadow: primary
+                ? [
+                    BoxShadow(
+                      color: purple.withValues(alpha: 0.18),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: foreground, size: 20),
+              const SizedBox(height: 5),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+                style: TextStyle(
+                  color: foreground,
+                  fontSize: 12,
+                  height: 1,
+                  fontWeight: primary ? FontWeight.w700 : FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaceDetailsSheet extends StatelessWidget {
+  const _PlaceDetailsSheet({
+    required this.name,
+    required this.address,
+    required this.location,
+  });
+
+  final String name;
+  final String? address;
+  final maplibre.LatLng location;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(22, 12, 22, 26),
+      decoration: const BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border.fromBorderSide(BorderSide(color: borderColor)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 42,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: borderColor,
+                  borderRadius: BorderRadius.circular(5),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Place details',
+              style: TextStyle(
+                color: textColor,
+                fontSize: 21,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _PlaceDetailRow(icon: Icons.place_rounded, value: name),
+            if (address != null) ...[
+              const SizedBox(height: 13),
+              _PlaceDetailRow(
+                icon: Icons.location_on_outlined,
+                value: address!,
+              ),
+            ],
+            const SizedBox(height: 13),
+            _PlaceDetailRow(
+              icon: Icons.my_location_rounded,
+              value:
+                  '${location.latitude.toStringAsFixed(6)}, '
+                  '${location.longitude.toStringAsFixed(6)}',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaceDetailRow extends StatelessWidget {
+  const _PlaceDetailRow({required this.icon, required this.value});
+
+  final IconData icon;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: purple, size: 20),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(
+              color: mutedColor,
+              fontSize: 14,
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

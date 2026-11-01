@@ -150,7 +150,7 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
           ),
           const SizedBox(height: 15),
           DropdownButtonFormField<String>(
-            value: _truckType,
+            initialValue: _truckType,
             onChanged: (value) => setState(() => _truckType = value),
             validator: (value) => value == null ? 'Select a truck type' : null,
             dropdownColor: surface,
