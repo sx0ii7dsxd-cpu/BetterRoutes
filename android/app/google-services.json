@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "698588431992-3v9jrmngk8ruf35gqh2k8q0tlppc5amr.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.betterroutes.app",
+            "certificate_hash": "9b0ff96acbf9fe7d66e988fa38e10397eae3a139"
+          }
+        },
+        {
           "client_id": "698588431992-5u8rc9ptv8g2tl87eiljt2rrnagcplb5.apps.googleusercontent.com",
           "client_type": 3
         }
