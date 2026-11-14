@@ -17,7 +17,7 @@ const Color _border = Color(0xFF383044);
 class RoutePlanningPage extends StatefulWidget {
   const RoutePlanningPage({
     required this.startingLocation,
-    required this.destination,
+    this.destination,
     this.viaStops = const [],
     this.placeSearchService,
     this.routeCalculationService,
@@ -25,7 +25,7 @@ class RoutePlanningPage extends StatefulWidget {
   });
 
   final PlaceSearchResult? startingLocation;
-  final PlaceSearchResult destination;
+  final PlaceSearchResult? destination;
   final List<PlaceSearchResult> viaStops;
   final PlaceSearchService? placeSearchService;
   final RouteCalculationService? routeCalculationService;
@@ -64,7 +64,9 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
     _fromController = TextEditingController(
       text: widget.startingLocation?.displayName,
     );
-    _toController = TextEditingController(text: widget.destination.displayName);
+    _toController = TextEditingController(
+      text: widget.destination?.displayName,
+    );
     _ownsPlaceSearchService = widget.placeSearchService == null;
     _placeSearchService =
         widget.placeSearchService ??
