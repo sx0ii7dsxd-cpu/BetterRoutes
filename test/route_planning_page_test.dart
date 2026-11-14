@@ -9,6 +9,43 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 void main() {
+  testWidgets('starts a new route with an optional destination', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RoutePlanningPage(
+          startingLocation: _place(
+            name: 'Current location',
+            latitude: 26.9124,
+            longitude: 75.7873,
+          ),
+        ),
+      ),
+    );
+
+    final Finder fields = find.byType(TextField);
+    expect(
+      tester.widget<TextField>(fields.at(0)).controller!.text,
+      'Current location',
+    );
+    expect(tester.widget<TextField>(fields.at(1)).controller!.text, isEmpty);
+
+    final Finder findRouteButton = find.widgetWithText(
+      FilledButton,
+      'Find Route',
+    );
+    await tester.ensureVisible(findRouteButton);
+    await tester.pumpAndSettle();
+    await tester.tap(findRouteButton);
+    await tester.pump();
+
+    expect(
+      find.text('Choose both locations from the suggestions first.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Find Route returns the calculated route set to its caller', (
     WidgetTester tester,
   ) async {

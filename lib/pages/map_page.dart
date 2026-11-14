@@ -38,9 +38,12 @@ class MapPage extends StatefulWidget {
 enum _LocationState { checking, ready, serviceDisabled, denied, deniedForever }
 
 class _MapPageState extends State<MapPage> {
-  static const String _tileUrl =
+  static const String _lightTileUrl =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  static const String _darkTileUrl =
+      'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
   static const String _mapTilerApiKey = PlaceSearchService.configuredApiKey;
+  static const String _darkMapTilerStyleId = 'streets-v2-dark';
   static const String _mapTilerStyleId = String.fromEnvironment(
     'MAPTILER_STYLE_ID',
     defaultValue: '01a17d04-02f5-792b-8055-66c8af6dad5f',
@@ -88,11 +91,15 @@ class _MapPageState extends State<MapPage> {
       _mapTilerApiKey.trim() != 'YOUR_MAPTILER_API_KEY' &&
       _mapTilerStyleId.trim().isNotEmpty;
 
-  String get _mapTilerStyleUrl => Uri.https(
-    'api.maptiler.com',
-    '/maps/${_mapTilerStyleId.trim()}/style.json',
-    {'key': _mapTilerApiKey.trim()},
-  ).toString();
+  String get _mapTilerStyleUrl {
+    final String styleId = _isDarkMode
+        ? _darkMapTilerStyleId
+        : _mapTilerStyleId.trim();
+    return Uri.https('api.maptiler.com', '/maps/$styleId/style.json', {
+      'key': _mapTilerApiKey.trim(),
+    }).toString();
+  }
+
   bool _isDarkMode = true;
 
   @override
@@ -448,7 +455,6 @@ class _MapPageState extends State<MapPage> {
     final maplibre.LatLng? destinationLocation = existingPlan == null
         ? _searchedLocation
         : maplibre.LatLng(existingPlan.to.latitude, existingPlan.to.longitude);
-    if (destinationName == null || destinationLocation == null) return;
     final PlaceSearchResult? startingLocation =
         existingPlan?.from ??
         (_position == null
@@ -459,19 +465,23 @@ class _MapPageState extends State<MapPage> {
                 latitude: _position!.latitude,
                 longitude: _position!.longitude,
               ));
+    final PlaceSearchResult? destination =
+        destinationName == null || destinationLocation == null
+        ? null
+        : PlaceSearchResult(
+            name: destinationName,
+            displayName: destinationName,
+            address: existingPlan?.to.address ?? _searchedAddress,
+            latitude: destinationLocation.latitude,
+            longitude: destinationLocation.longitude,
+          );
 
     final RoutePlanResult? result = await Navigator.of(context)
         .push<RoutePlanResult>(
           MaterialPageRoute<RoutePlanResult>(
             builder: (_) => RoutePlanningPage(
               startingLocation: startingLocation,
-              destination: PlaceSearchResult(
-                name: destinationName,
-                displayName: destinationName,
-                address: existingPlan?.to.address ?? _searchedAddress,
-                latitude: destinationLocation.latitude,
-                longitude: destinationLocation.longitude,
-              ),
+              destination: destination,
               viaStops: existingPlan?.viaStops ?? const [],
               placeSearchService: _placeSearchService,
             ),
@@ -850,6 +860,26 @@ class _MapPageState extends State<MapPage> {
     _startMapLibreLoadTimer();
   }
 
+  Future<void> _toggleMapTheme() async {
+    final maplibre.MapLibreMapController? controller = _mapLibreController;
+    setState(() {
+      _isDarkMode = !_isDarkMode;
+      if (_isMapLibreActive && controller != null) {
+        _mapStyleLoaded = false;
+      }
+    });
+
+    if (!_isMapLibreActive || controller == null) return;
+    _startMapLibreLoadTimer();
+    try {
+      await controller.setStyle(_mapTilerStyleUrl);
+    } on PlatformException {
+      _fallbackToLegacyMap(
+        'Could not change the map style. Showing the standard map.',
+      );
+    }
+  }
+
   void _onMapLibreStyleLoaded() {
     _mapLibreLoadTimer?.cancel();
     _mapStyleLoaded = true;
@@ -1135,9 +1165,7 @@ class _MapPageState extends State<MapPage> {
             onSearch: _searchPlace,
             onTextChanged: _onSearchTextChanged,
             isDarkMode: _isDarkMode,
-            onThemeToggle: () {
-              setState(() => _isDarkMode = !_isDarkMode);
-            },
+            onThemeToggle: _toggleMapTheme,
             onProfileTap: _openProfile,
           ),
         ),
@@ -1242,6 +1270,7 @@ class _MapPageState extends State<MapPage> {
             return _ProjectPanel(
               scrollController: scrollController,
               onAction: _showMessage,
+              onPlanRoute: () => unawaited(_openRoutePlanner()),
               onTrackDelivery: () {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
@@ -1295,7 +1324,7 @@ class _MapPageState extends State<MapPage> {
       options: legacy.MapOptions(initialCenter: here, initialZoom: 16),
       children: [
         legacy.TileLayer(
-          urlTemplate: _tileUrl,
+          urlTemplate: _isDarkMode ? _darkTileUrl : _lightTileUrl,
           userAgentPackageName: 'com.betterroutes.app',
         ),
         legacy.MarkerLayer(
@@ -1382,9 +1411,10 @@ class _MapPageState extends State<MapPage> {
               ),
             ],
           ),
-        const legacy.RichAttributionWidget(
+        legacy.RichAttributionWidget(
           attributions: [
-            legacy.TextSourceAttribution('© OpenStreetMap contributors'),
+            const legacy.TextSourceAttribution('© OpenStreetMap contributors'),
+            if (_isDarkMode) const legacy.TextSourceAttribution('© CARTO'),
           ],
         ),
       ],
@@ -1479,14 +1509,16 @@ class _SearchProfileBar extends StatelessWidget {
             ),
           IconButton(
             onPressed: onThemeToggle,
-            tooltip: isDarkMode
-                ? 'Switch to bright mode'
-                : 'Switch to dark mode',
+            tooltip: isDarkMode ? 'Switch to light map' : 'Switch to dark map',
             visualDensity: VisualDensity.compact,
-            icon: Icon(
-              isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
-              color: textColor,
-              size: 28,
+            icon: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              child: Icon(
+                isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+                key: ValueKey<bool>(isDarkMode),
+                color: textColor,
+                size: 28,
+              ),
             ),
           ),
           Semantics(
@@ -1973,11 +2005,13 @@ class _ProjectPanel extends StatelessWidget {
   const _ProjectPanel({
     required this.scrollController,
     required this.onAction,
+    required this.onPlanRoute,
     required this.onTrackDelivery,
   });
 
   final ScrollController scrollController;
   final ValueChanged<String> onAction;
+  final VoidCallback onPlanRoute;
   final VoidCallback onTrackDelivery;
 
   @override
@@ -2056,7 +2090,7 @@ class _ProjectPanel extends StatelessWidget {
                     icon: Icons.route_rounded,
                     title: 'Plan a route',
                     subtitle: 'Find the best way to go',
-                    onTap: () => onAction('Route planning is coming soon.'),
+                    onTap: onPlanRoute,
                   ),
                   _ProjectActionCard(
                     icon: Icons.bookmark_border_rounded,

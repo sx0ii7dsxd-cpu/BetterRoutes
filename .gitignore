@@ -32,6 +32,11 @@ migrate_working_dir/
 .pub/
 .env.maptiler.json
 /build/
+/functions/node_modules/
+/functions/.env.*
+/functions/.env
+**/.vercel/
+/functions/*service-account*.json
 /coverage/
 
 # Symbolication related

@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import 'email_change_page.dart';
 
 class ProfileMenu extends StatelessWidget {
   const ProfileMenu({super.key});
@@ -40,73 +41,7 @@ class ProfileMenu extends StatelessWidget {
                 style: TextStyle(color: _muted, fontSize: 16),
               ),
             )
-          : SafeArea(
-              top: false,
-              child: Center(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 480),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const SizedBox(height: 32),
-                        Center(child: ProfileAvatar(user: user, radius: 54)),
-                        const SizedBox(height: 20),
-                        Text(
-                          _displayName(user),
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: _text,
-                            fontSize: 26,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        if (user.email != null && user.email!.isNotEmpty) ...[
-                          const SizedBox(height: 7),
-                          Text(
-                            user.email!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: _muted, fontSize: 15),
-                          ),
-                        ],
-                        const SizedBox(height: 34),
-                        _ProfileDetail(
-                          icon: Icons.person_outline_rounded,
-                          label: 'Name',
-                          value: _displayName(user),
-                        ),
-                        if (user.email != null && user.email!.isNotEmpty)
-                          _ProfileDetail(
-                            icon: Icons.email_outlined,
-                            label: 'Email',
-                            value: user.email!,
-                          ),
-                        _ProfileDetail(
-                          icon: Icons.verified_user_outlined,
-                          label: 'Sign-in method',
-                          value: _providerName(user),
-                        ),
-                        const SizedBox(height: 28),
-                        OutlinedButton.icon(
-                          onPressed: () => _signOut(context),
-                          icon: const Icon(Icons.logout_rounded),
-                          label: const Text('Sign out'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _text,
-                            side: const BorderSide(color: _border),
-                            padding: const EdgeInsets.symmetric(vertical: 15),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          : SafeArea(top: false, child: _ProfileContent(user: user)),
     );
   }
 
@@ -147,6 +82,186 @@ class ProfileMenu extends StatelessWidget {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const HomePage()),
       (route) => false,
+    );
+  }
+}
+
+class _ProfileContent extends StatefulWidget {
+  const _ProfileContent({required this.user});
+
+  final User user;
+
+  @override
+  State<_ProfileContent> createState() => _ProfileContentState();
+}
+
+class _ProfileContentState extends State<_ProfileContent> {
+  String? _updatedEmail;
+
+  Future<void> _changeEmail() async {
+    final String? currentEmail = _updatedEmail ?? widget.user.email;
+    if (currentEmail == null || currentEmail.isEmpty) return;
+
+    final String? updatedEmail = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => EmailChangePage(
+          currentEmail: currentEmail,
+          googleSignInLinked: widget.user.providerData.any(
+            (UserInfo info) => info.providerId == 'google.com',
+          ),
+        ),
+      ),
+    );
+    if (!mounted || updatedEmail == null) return;
+    setState(() => _updatedEmail = updatedEmail);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String? email = _updatedEmail ?? widget.user.email;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [ProfileMenu._surface, Color(0xFF282132)],
+                  ),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: ProfileMenu._border),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: ProfileMenu._purple.withValues(alpha: 0.65),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: ProfileAvatar(user: widget.user, radius: 34),
+                    ),
+                    const SizedBox(width: 17),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'PROFILE OVERVIEW',
+                            style: TextStyle(
+                              color: ProfileMenu._purple,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            ProfileMenu._displayName(widget.user),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: ProfileMenu._text,
+                              fontSize: 20,
+                              height: 1.2,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          if (email != null && email.isNotEmpty) ...[
+                            const SizedBox(height: 5),
+                            Text(
+                              email,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: ProfileMenu._muted,
+                                fontSize: 13,
+                                height: 1.3,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 28),
+              const Text(
+                'ACCOUNT DETAILS',
+                style: TextStyle(
+                  color: ProfileMenu._muted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.4,
+                ),
+              ),
+              const SizedBox(height: 11),
+              Container(
+                decoration: BoxDecoration(
+                  color: ProfileMenu._surface,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: ProfileMenu._border),
+                ),
+                child: Column(
+                  children: [
+                    _ProfileDetail(
+                      icon: Icons.person_outline_rounded,
+                      label: 'Name',
+                      value: ProfileMenu._displayName(widget.user),
+                      showDivider: true,
+                    ),
+                    if (email != null && email.isNotEmpty)
+                      _ProfileDetail(
+                        icon: Icons.email_outlined,
+                        label: 'Email',
+                        value: email,
+                        showDivider: true,
+                        actionLabel: 'Change',
+                        onAction: _changeEmail,
+                      ),
+                    _ProfileDetail(
+                      icon: Icons.verified_user_outlined,
+                      label: 'Sign-in method',
+                      value: ProfileMenu._providerName(widget.user),
+                      showDivider: false,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              OutlinedButton.icon(
+                onPressed: () => ProfileMenu._signOut(context),
+                icon: const Icon(Icons.logout_rounded, size: 19),
+                label: const Text('Sign out'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: ProfileMenu._muted,
+                  side: const BorderSide(color: ProfileMenu._border),
+                  backgroundColor: ProfileMenu._surface.withValues(alpha: 0.45),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -207,51 +322,73 @@ class _ProfileDetail extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
+    required this.showDivider,
+    this.actionLabel,
+    this.onAction,
   });
 
   final IconData icon;
   final String label;
   final String value;
+  final bool showDivider;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-      decoration: BoxDecoration(
-        color: ProfileMenu._surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: ProfileMenu._border),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: ProfileMenu._purple, size: 21),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: ProfileMenu._muted,
-                    fontSize: 12,
-                  ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 16),
+          child: Row(
+            children: [
+              Icon(icon, color: ProfileMenu._purple, size: 20),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        color: ProfileMenu._muted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      value,
+                      style: const TextStyle(
+                        color: ProfileMenu._text,
+                        fontSize: 15,
+                        height: 1.25,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    color: ProfileMenu._text,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
+              ),
+              if (onAction != null)
+                TextButton(
+                  onPressed: onAction,
+                  style: TextButton.styleFrom(
+                    foregroundColor: ProfileMenu._purple,
+                    visualDensity: VisualDensity.compact,
                   ),
+                  child: Text(actionLabel ?? 'Edit'),
                 ),
-              ],
-            ),
+            ],
           ),
-        ],
-      ),
+        ),
+        if (showDivider)
+          const Divider(
+            height: 1,
+            thickness: 1,
+            indent: 52,
+            color: ProfileMenu._border,
+          ),
+      ],
     );
   }
 }
