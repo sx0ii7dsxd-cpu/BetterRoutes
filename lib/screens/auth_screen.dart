@@ -22,6 +22,10 @@ class _AuthScreenState extends State<AuthScreen> {
   bool _isLoading = false;
   String? _authMessage;
 
+  static const String _googleServerClientId =
+      '698588431992-5u8rc9ptv8g2tl87eiljt2rrnagcplb5.apps.googleusercontent.com';
+  static Future<void>? _googleSignInInitialization;
+
   static const Color background = Color(0xFF17131F);
   static const Color purple = Color(0xFFB39DDB);
   static const Color textColor = Color(0xFFF7F5FC);
@@ -124,28 +128,34 @@ class _AuthScreenState extends State<AuthScreen> {
         return 'Too many attempts. Please try again later.';
       case 'network-request-failed':
         return 'Check your internet connection.';
+      case 'operation-not-allowed':
+        return 'Google sign-in is not enabled in Firebase Authentication.';
       default:
         return 'Authentication failed. Please try again.';
     }
   }
 
   Future<void> _signInWithGoogle() async {
+    if (_isLoading) return;
     setState(() => _isLoading = true);
 
     try {
       final googleSignIn = GoogleSignIn.instance;
 
-      await googleSignIn.initialize(
-        serverClientId: "698588431992-5u8rc9ptv8g2tl87eiljt2rrnagcplb5.apps.googleusercontent.com",
-      );
+      final initialization = _googleSignInInitialization ??= googleSignIn
+          .initialize(serverClientId: _googleServerClientId);
+      await initialization;
 
       final googleUser = await googleSignIn.authenticate();
+      final idToken = googleUser.authentication.idToken;
+      if (idToken == null || idToken.isEmpty) {
+        throw const GoogleSignInException(
+          code: GoogleSignInExceptionCode.clientConfigurationError,
+          description: 'Google returned no ID token. Check the Android OAuth client configuration.',
+        );
+      }
 
-      final googleAuth = googleUser.authentication;
-
-      final credential = GoogleAuthProvider.credential(
-        idToken: googleAuth.idToken,
-      );
+      final credential = GoogleAuthProvider.credential(idToken: idToken);
 
       await FirebaseAuth.instance.signInWithCredential(credential);
 
@@ -156,12 +166,30 @@ class _AuthScreenState extends State<AuthScreen> {
         MaterialPageRoute(builder: (_) => const MapPage()),
         (route) => false,
       );
-    } on FirebaseAuthException catch (e) {
-      _showMessage(_firebaseErrorMessage(e.code));
-    } catch (_) {
-      _showMessage(
-        'Google sign-in could not be completed. Check your configuration.',
+    } on GoogleSignInException catch (e, stackTrace) {
+      debugPrint(
+        'Google sign-in failed (${e.code.name}): '
+        '${e.description ?? e.details ?? 'No additional details'}\n$stackTrace',
       );
+      final description = e.description?.trim();
+      if (e.code != GoogleSignInExceptionCode.canceled ||
+          (description != null &&
+              !description.toLowerCase().contains('user canceled'))) {
+        _showMessage(
+          description == null || description.isEmpty
+              ? 'Google sign-in failed (${e.code.name}).'
+              : 'Google sign-in failed: $description',
+        );
+      }
+    } on FirebaseAuthException catch (e, stackTrace) {
+      debugPrint(
+        'Firebase Google sign-in failed (${e.code}): '
+        '${e.message ?? 'No additional details'}\n$stackTrace',
+      );
+      _showMessage(_firebaseErrorMessage(e.code));
+    } catch (error, stackTrace) {
+      debugPrint('Google sign-in failed unexpectedly: $error\n$stackTrace');
+      _showMessage('Google sign-in failed: $error');
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
