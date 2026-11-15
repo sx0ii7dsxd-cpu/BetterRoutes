@@ -13,6 +13,7 @@ const Color _amethyst = Color(0xFFB39DDB);
 const Color _text = Color(0xFFF7F5FC);
 const Color _muted = Color(0xFFB5AEC5);
 const Color _border = Color(0xFF383044);
+const Color _origin = Color(0xFF5CC6A3);
 
 class RoutePlanningPage extends StatefulWidget {
   const RoutePlanningPage({
@@ -324,7 +325,7 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
           side: BorderSide(color: _amethyst.withValues(alpha: 0.48)),
           backgroundColor: _amethyst.withValues(alpha: 0.055),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(16),
           ),
           textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
         ),
@@ -421,7 +422,7 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
             children: [
               _buildHeader(context),
-              const SizedBox(height: 34),
+              const SizedBox(height: 38),
               const Text(
                 'PLAN A JOURNEY',
                 style: TextStyle(
@@ -433,25 +434,25 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
               ),
               const SizedBox(height: 10),
               const Text(
-                'Set your direction.',
+                'Plan your next route.',
                 style: TextStyle(
                   color: _text,
-                  fontSize: 30,
+                  fontSize: 32,
                   height: 1.15,
                   fontWeight: FontWeight.w700,
-                  letterSpacing: -0.5,
+                  letterSpacing: -0.8,
                 ),
               ),
               const SizedBox(height: 9),
               const Text(
-                'Choose where your journey begins and ends.',
+                'Add an origin, destination, and any stops along the way.',
                 style: TextStyle(color: _muted, fontSize: 14, height: 1.5),
               ),
-              const SizedBox(height: 25),
+              const SizedBox(height: 26),
               _buildStopsCard(),
-              const SizedBox(height: 14),
+              const SizedBox(height: 13),
               _buildAddStopButton(),
-              const SizedBox(height: 28),
+              const SizedBox(height: 24),
               SizedBox(
                 height: 58,
                 child: FilledButton.icon(
@@ -460,7 +461,7 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
                     backgroundColor: _amethyst,
                     foregroundColor: _background,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius: BorderRadius.circular(17),
                     ),
                     textStyle: const TextStyle(
                       fontSize: 15,
@@ -482,6 +483,12 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
                     _isCalculatingRoute ? 'Finding route...' : 'Find Route',
                   ),
                 ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Your route options will include distance and estimated travel time.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
               ),
               const SizedBox(height: 13),
             ],
@@ -508,9 +515,9 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
                 'BETTERROUTES',
                 style: TextStyle(
                   color: _text,
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.w800,
-                  letterSpacing: 1.7,
+                  letterSpacing: 1.5,
                 ),
               ),
               SizedBox(height: 3),
@@ -539,14 +546,50 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 28,
-            offset: const Offset(0, 12),
+            color: Colors.black.withValues(alpha: 0.16),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
           ),
         ],
       ),
       child: Column(
         children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(3, 0, 3, 13),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'ROUTE STOPS',
+                    style: TextStyle(
+                      color: _muted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.3,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _surfaceRaised,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '${_intermediateStops.length + 2} points',
+                    style: const TextStyle(
+                      color: _muted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           _buildLocationField(_RouteField.from),
           SizedBox(
             height: 54,
@@ -619,7 +662,7 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
           : isTo
           ? Icons.location_on_rounded
           : Icons.stop_circle_outlined,
-      accent: _amethyst,
+      accent: isFrom ? _origin : _amethyst,
       helperText: selectedLocation?.address,
       helperValue: selectedLocation?.displayName,
       textInputAction: isTo ? TextInputAction.done : TextInputAction.next,
@@ -778,7 +821,7 @@ class _LocationInput extends StatelessWidget {
         decoration: BoxDecoration(
           color: _surfaceRaised.withValues(alpha: 0.68),
           border: Border.all(color: _border.withValues(alpha: 0.9)),
-          borderRadius: BorderRadius.circular(17),
+          borderRadius: BorderRadius.circular(15),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,

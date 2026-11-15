@@ -100,7 +100,7 @@ class _MapPageState extends State<MapPage> {
     }).toString();
   }
 
-  bool _isDarkMode = true;
+  bool _isDarkMode = false;
 
   @override
   void initState() {

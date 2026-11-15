@@ -24,12 +24,18 @@ void main() {
       ),
     );
 
+    final Scaffold plannerScaffold = tester.widget(find.byType(Scaffold));
+    expect(plannerScaffold.backgroundColor!.computeLuminance(), lessThan(0.1));
+
     final Finder fields = find.byType(TextField);
     expect(
       tester.widget<TextField>(fields.at(0)).controller!.text,
       'Current location',
     );
     expect(tester.widget<TextField>(fields.at(1)).controller!.text, isEmpty);
+
+    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.pumpAndSettle();
 
     final Finder findRouteButton = find.widgetWithText(
       FilledButton,
