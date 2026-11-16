@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -11,7 +12,15 @@ import 'package:latlong2/latlong.dart' as latlong;
 import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
 import 'package:share_plus/share_plus.dart';
 
+import '../models/recent_search_model.dart';
+import '../models/saved_place_model.dart';
+import '../models/warehouse_model.dart';
 import 'place_search_service.dart';
+import 'recent_searches_page.dart';
+import 'saved_places_page.dart';
+import '../services/recent_search_service.dart';
+import '../services/saved_place_service.dart';
+import '../services/warehouse_service.dart';
 import 'track_shipment_page.dart';
 import 'truck_registration_page.dart';
 import 'warehouse_page.dart';
@@ -20,13 +29,9 @@ import 'route_calculation_service.dart';
 import 'route_navigation_progress.dart';
 import 'route_planning_page.dart';
 import 'route_preview_panel.dart';
+import '../theme/app_colors.dart';
 
-const Color background = Color(0xFF17131F);
-const Color purple = Color(0xFFB39DDB);
-const Color textColor = Color(0xFFF7F5FC);
-const Color mutedColor = Color(0xFFB5AEC5);
-const Color surface = Color(0xFF211C2B);
-const Color borderColor = Color(0xFF383044);
+export '../theme/app_colors.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -49,6 +54,8 @@ class _MapPageState extends State<MapPage> {
     defaultValue: '01a17d04-02f5-792b-8055-66c8af6dad5f',
   );
   static const Duration _mapLibreLoadTimeout = Duration(seconds: 30);
+  static const String _warehouseMarkerImageId =
+      'better-routes-warehouse-marker';
 
   final legacy.MapController _legacyMapController = legacy.MapController();
   final TextEditingController _searchController = TextEditingController();
@@ -57,6 +64,11 @@ class _MapPageState extends State<MapPage> {
     apiKey: _mapTilerApiKey,
     client: _httpClient,
   );
+  final SavedPlaceService _savedPlaceService = SavedPlaceService.local();
+  final RecentSearchService _recentSearchService = RecentSearchService.local();
+  final WarehouseService _warehouseService = WarehouseService.local();
+  late final void Function(maplibre.Symbol) _warehouseSymbolTapListener =
+      _onWarehouseSymbolTapped;
   Timer? _suggestionDebounce;
   List<PlaceSearchResult> _placeSuggestions = [];
   bool _isLoadingSuggestions = false;
@@ -67,7 +79,12 @@ class _MapPageState extends State<MapPage> {
   Position? _position;
   maplibre.LatLng? _searchedLocation;
   String? _searchedName;
+  String? _searchedDisplayName;
   String? _searchedAddress;
+  String? _searchedPlaceId;
+  bool _isSelectedPlaceSaved = false;
+  bool _isSavingSelectedPlace = false;
+  int _selectedPlaceGeneration = 0;
   RoutePlanResult? _activeRoutePlan;
   int _selectedRouteIndex = 0;
   bool _isNavigating = false;
@@ -84,6 +101,7 @@ class _MapPageState extends State<MapPage> {
   bool _isSearching = false;
   bool _mapStyleLoaded = false;
   bool _isMapLibreActive = false;
+  bool _warehouseMarkerImageLoaded = false;
   Timer? _mapLibreLoadTimer;
 
   bool get _hasMapTilerConfig =>
@@ -113,6 +131,7 @@ class _MapPageState extends State<MapPage> {
     _mapLibreLoadTimer?.cancel();
     _suggestionDebounce?.cancel();
     unawaited(_navigationPositionSubscription?.cancel());
+    _mapLibreController?.onSymbolTapped.remove(_warehouseSymbolTapListener);
     _legacyMapController.dispose();
     _searchController.dispose();
     _httpClient.close();
@@ -231,7 +250,12 @@ class _MapPageState extends State<MapPage> {
       setState(() {
         _searchedLocation = null;
         _searchedName = null;
+        _searchedDisplayName = null;
         _searchedAddress = null;
+        _searchedPlaceId = null;
+        _isSelectedPlaceSaved = false;
+        _isSavingSelectedPlace = false;
+        _selectedPlaceGeneration++;
       });
     }
   }
@@ -356,12 +380,18 @@ class _MapPageState extends State<MapPage> {
       );
       final double? latitude = double.tryParse('${result['lat']}');
       final double? longitude = double.tryParse('${result['lon']}');
-      if (latitude == null || longitude == null) {
+      if (latitude == null ||
+          longitude == null ||
+          !latitude.isFinite ||
+          !longitude.isFinite ||
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180) {
         _showMessage('The place search returned an invalid location.');
         return;
       }
 
-      final maplibre.LatLng place = maplibre.LatLng(latitude, longitude);
       final String? resultName = result['name'] as String?;
       final String name = resultName?.trim().isNotEmpty == true
           ? resultName!.trim()
@@ -372,23 +402,27 @@ class _MapPageState extends State<MapPage> {
               displayAddress!.trim() != name
           ? displayAddress.trim()
           : null;
-      if (!mounted) return;
-      setState(() {
-        _searchedLocation = place;
-        _searchedName = name;
-        _searchedAddress = address;
-      });
-      if (_isMapLibreActive) {
-        await _moveMapLibreCamera(place, 15);
-        await _refreshMapAnnotations();
-      } else {
-        _legacyMapController.move(
-          latlong.LatLng(place.latitude, place.longitude),
-          15,
-        );
-      }
-      if (!mounted) return;
-      FocusScope.of(context).unfocus();
+      final Object? osmId = result['osm_id'];
+      final Object? placeId = result['place_id'];
+      final String? providerPlaceId = osmId != null
+          ? 'nominatim:${result['osm_type'] ?? ''}:$osmId'
+          : placeId != null
+          ? 'nominatim:place:$placeId'
+          : null;
+      final String fullName = displayAddress?.trim().isNotEmpty == true
+          ? displayAddress!.trim()
+          : name;
+      await _selectPlace(
+        PlaceSearchResult(
+          name: name,
+          displayName: fullName,
+          address: address,
+          latitude: latitude,
+          longitude: longitude,
+          placeId: providerPlaceId,
+        ),
+        query: query,
+      );
     } on TimeoutException {
       _showMessage('Place search took too long. Please try again.');
     } on http.ClientException {
@@ -397,6 +431,121 @@ class _MapPageState extends State<MapPage> {
       _showMessage('Place search returned an unreadable response.');
     } finally {
       if (mounted) setState(() => _isSearching = false);
+    }
+  }
+
+  Future<void> _selectPlace(
+    PlaceSearchResult place, {
+    required String query,
+  }) async {
+    _hideSuggestions();
+    if (!mounted) return;
+    final int generation = ++_selectedPlaceGeneration;
+    final maplibre.LatLng location = maplibre.LatLng(
+      place.latitude,
+      place.longitude,
+    );
+    _searchController.value = TextEditingValue(
+      text: place.displayName,
+      selection: TextSelection.collapsed(offset: place.displayName.length),
+    );
+    setState(() {
+      _searchedLocation = location;
+      _searchedName = place.name;
+      _searchedDisplayName = place.displayName;
+      _searchedAddress = place.address;
+      _searchedPlaceId = place.placeId;
+      _isSelectedPlaceSaved = false;
+      _isSavingSelectedPlace = false;
+    });
+
+    if (_isMapLibreActive) {
+      await _moveMapLibreCamera(location, 15);
+      await _refreshMapAnnotations();
+    } else {
+      _legacyMapController.move(
+        latlong.LatLng(location.latitude, location.longitude),
+        15,
+      );
+    }
+    if (!mounted) return;
+    FocusScope.of(context).unfocus();
+
+    try {
+      final bool isSaved = await _savedPlaceService.isSaved(place);
+      if (mounted && generation == _selectedPlaceGeneration) {
+        setState(() => _isSelectedPlaceSaved = isSaved);
+      }
+    } catch (error) {
+      _showMessage('Could not check saved places: $error');
+    }
+    await _recordRecentSearch(place, query: query);
+  }
+
+  Future<void> _recordRecentSearch(
+    PlaceSearchResult place, {
+    required String query,
+  }) async {
+    try {
+      await _recentSearchService.recordPlace(place, query: query);
+    } catch (error) {
+      _showMessage('Could not update recent searches: $error');
+    }
+  }
+
+  Future<void> _saveSelectedPlace() async {
+    final String? name = _searchedName;
+    final maplibre.LatLng? location = _searchedLocation;
+    if (name == null || location == null || _isSavingSelectedPlace) return;
+    final PlaceSearchResult place = PlaceSearchResult(
+      name: name,
+      displayName: _searchedDisplayName ?? name,
+      address: _searchedAddress,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      placeId: _searchedPlaceId,
+    );
+    final int generation = _selectedPlaceGeneration;
+    setState(() => _isSavingSelectedPlace = true);
+    try {
+      final bool inserted = await _savedPlaceService.save(place);
+      if (!mounted) return;
+      if (generation == _selectedPlaceGeneration) {
+        setState(() => _isSelectedPlaceSaved = true);
+      }
+      _showMessage(
+        inserted ? 'Place saved.' : 'This place is already saved.',
+      );
+    } catch (error) {
+      _showMessage('Could not save this place: $error');
+    } finally {
+      if (mounted && generation == _selectedPlaceGeneration) {
+        setState(() => _isSavingSelectedPlace = false);
+      }
+    }
+  }
+
+  Future<void> _openSavedPlaces() async {
+    final SavedPlace? place = await Navigator.of(context).push<SavedPlace>(
+      MaterialPageRoute<SavedPlace>(builder: (_) => const SavedPlacesPage()),
+    );
+    if (!mounted || place == null) return;
+    await _selectPlace(place.toPlaceSearchResult(), query: place.displayName);
+  }
+
+  Future<void> _openRecentSearches() async {
+    final RecentSearch? search = await Navigator.of(context)
+        .push<RecentSearch>(
+          MaterialPageRoute<RecentSearch>(
+            builder: (_) => const RecentSearchesPage(),
+          ),
+        );
+    if (!mounted || search == null) return;
+    final PlaceSearchResult? place = search.toPlaceSearchResult();
+    if (place == null) {
+      await _searchPlace(search.query);
+    } else {
+      await _selectPlace(place, query: search.query);
     }
   }
 
@@ -474,6 +623,7 @@ class _MapPageState extends State<MapPage> {
             address: existingPlan?.to.address ?? _searchedAddress,
             latitude: destinationLocation.latitude,
             longitude: destinationLocation.longitude,
+            placeId: existingPlan?.to.placeId ?? _searchedPlaceId,
           );
 
     final RoutePlanResult? result = await Navigator.of(context)
@@ -484,6 +634,11 @@ class _MapPageState extends State<MapPage> {
               destination: destination,
               viaStops: existingPlan?.viaStops ?? const [],
               placeSearchService: _placeSearchService,
+              onDestinationSelected: (PlaceSearchResult place) {
+                unawaited(
+                  _recordRecentSearch(place, query: place.displayName),
+                );
+              },
             ),
           ),
         );
@@ -493,6 +648,7 @@ class _MapPageState extends State<MapPage> {
 
   Future<void> _showRoutePlan(RoutePlanResult result) async {
     await _stopNavigation();
+    _selectedPlaceGeneration++;
     setState(() {
       _activeRoutePlan = result;
       _selectedRouteIndex = 0;
@@ -503,7 +659,11 @@ class _MapPageState extends State<MapPage> {
         result.to.longitude,
       );
       _searchedName = result.to.displayName;
+      _searchedDisplayName = result.to.displayName;
       _searchedAddress = result.to.address;
+      _searchedPlaceId = result.to.placeId;
+      _isSelectedPlaceSaved = false;
+      _isSavingSelectedPlace = false;
     });
 
     if (_isMapLibreActive) {
@@ -515,6 +675,7 @@ class _MapPageState extends State<MapPage> {
     }
 
     if (mounted) {
+      await _recordRecentSearch(result.to, query: result.to.displayName);
       _showMessage(
         '${result.routes.length} route${result.routes.length == 1 ? '' : 's'} found.',
       );
@@ -765,7 +926,12 @@ class _MapPageState extends State<MapPage> {
       _selectedRouteIndex = 0;
       _searchedLocation = null;
       _searchedName = null;
+      _searchedDisplayName = null;
       _searchedAddress = null;
+      _searchedPlaceId = null;
+      _isSelectedPlaceSaved = false;
+      _isSavingSelectedPlace = false;
+      _selectedPlaceGeneration++;
     });
     final maplibre.MapLibreMapController? controller = _mapLibreController;
     if (_isMapLibreActive && _mapStyleLoaded && controller != null) {
@@ -856,7 +1022,10 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _onMapLibreCreated(maplibre.MapLibreMapController controller) {
+    _mapLibreController?.onSymbolTapped.remove(_warehouseSymbolTapListener);
     _mapLibreController = controller;
+    _warehouseMarkerImageLoaded = false;
+    controller.onSymbolTapped.add(_warehouseSymbolTapListener);
     _startMapLibreLoadTimer();
   }
 
@@ -866,6 +1035,7 @@ class _MapPageState extends State<MapPage> {
       _isDarkMode = !_isDarkMode;
       if (_isMapLibreActive && controller != null) {
         _mapStyleLoaded = false;
+        _warehouseMarkerImageLoaded = false;
       }
     });
 
@@ -883,6 +1053,7 @@ class _MapPageState extends State<MapPage> {
   void _onMapLibreStyleLoaded() {
     _mapLibreLoadTimer?.cancel();
     _mapStyleLoaded = true;
+    _warehouseMarkerImageLoaded = false;
     final RoutePlanResult? routePlan = _activeRoutePlan;
     if (routePlan != null) {
       unawaited(_renderMapLibreRoute(routePlan));
@@ -909,10 +1080,12 @@ class _MapPageState extends State<MapPage> {
   void _fallbackToLegacyMap(String message) {
     if (!mounted || !_isMapLibreActive) return;
     _mapLibreLoadTimer?.cancel();
+    _mapLibreController?.onSymbolTapped.remove(_warehouseSymbolTapListener);
     setState(() {
       _isMapLibreActive = false;
       _mapStyleLoaded = false;
       _mapLibreController = null;
+      _warehouseMarkerImageLoaded = false;
     });
     _showMessage(message);
   }
@@ -938,8 +1111,17 @@ class _MapPageState extends State<MapPage> {
     final maplibre.MapLibreMapController? controller = _mapLibreController;
     if (controller == null) return;
 
+    List<Warehouse> warehouses;
+    try {
+      warehouses = await _warehouseService.getAll();
+    } on Exception catch (error) {
+      _showMessage('Warehouse markers could not be loaded: $error');
+      warehouses = const [];
+    }
+
     try {
       await controller.clearCircles();
+      await controller.clearSymbols();
       final List<maplibre.CircleOptions> circles = [];
       final Position? position = _position;
       if (position != null) {
@@ -1011,11 +1193,199 @@ class _MapPageState extends State<MapPage> {
       if (circles.isNotEmpty) {
         await controller.addCircles(circles);
       }
+      final List<Warehouse> locatedWarehouses = warehouses
+          .where(_hasValidWarehouseLocation)
+          .toList(growable: false);
+      if (locatedWarehouses.isNotEmpty) {
+        await _ensureWarehouseMarkerImage(controller);
+        await controller.setSymbolIconAllowOverlap(true);
+        await controller.addSymbols(
+          [
+            for (final Warehouse warehouse in locatedWarehouses)
+              maplibre.SymbolOptions(
+                geometry: maplibre.LatLng(
+                  warehouse.latitude!,
+                  warehouse.longitude!,
+                ),
+                iconImage: _warehouseMarkerImageId,
+                iconSize: 0.45,
+                iconAnchor: 'bottom',
+                textField: warehouse.name,
+                textSize: 12,
+                textColor: '#F7F5FC',
+                textHaloColor: '#0B0B0F',
+                textHaloWidth: 3,
+                textHaloBlur: 0.25,
+                textAnchor: 'bottom',
+                textOffset: const ui.Offset(0, -3),
+                fontNames: const ['Noto Sans Regular'],
+                zIndex: 5,
+              ),
+          ],
+          [
+            for (final Warehouse warehouse in locatedWarehouses)
+              {'warehouseId': warehouse.id},
+          ],
+        );
+      }
     } on PlatformException {
       _fallbackToLegacyMap(
         'The custom map could not update its markers. Showing the standard map.',
       );
+    } on StateError {
+      _fallbackToLegacyMap(
+        'The custom map is not ready to update warehouse markers. '
+        'Showing the standard map.',
+      );
     }
+  }
+
+  static bool _hasValidWarehouseLocation(Warehouse warehouse) {
+    final double? latitude = warehouse.latitude;
+    final double? longitude = warehouse.longitude;
+    return latitude != null &&
+        longitude != null &&
+        latitude.isFinite &&
+        longitude.isFinite &&
+        latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180;
+  }
+
+  Future<void> _ensureWarehouseMarkerImage(
+    maplibre.MapLibreMapController controller,
+  ) async {
+    if (_warehouseMarkerImageLoaded) return;
+    final Uint8List imageBytes = await _createWarehouseMarkerImage();
+    await controller.addImage(_warehouseMarkerImageId, imageBytes);
+    _warehouseMarkerImageLoaded = true;
+  }
+
+  Future<Uint8List> _createWarehouseMarkerImage() async {
+    const double width = 96;
+    const double height = 120;
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final ui.Canvas canvas = ui.Canvas(recorder);
+    final ui.Path pin = ui.Path()
+      ..moveTo(48, 112)
+      ..cubicTo(40, 98, 12, 68, 12, 43)
+      ..arcToPoint(
+        const ui.Offset(84, 43),
+        radius: const ui.Radius.circular(36),
+        clockwise: true,
+      )
+      ..cubicTo(84, 68, 56, 98, 48, 112)
+      ..close();
+
+    canvas.drawPath(
+      pin,
+      ui.Paint()
+        ..color = const ui.Color(0xFF0B0B0F)
+        ..style = ui.PaintingStyle.fill
+        ..isAntiAlias = true,
+    );
+    canvas.drawPath(
+      pin,
+      ui.Paint()
+        ..color = const ui.Color(0xFF00E5FF)
+        ..style = ui.PaintingStyle.stroke
+        ..strokeWidth = 4
+        ..isAntiAlias = true,
+    );
+
+    final ui.Path building = ui.Path()
+      ..moveTo(29, 38)
+      ..lineTo(48, 27)
+      ..lineTo(67, 38)
+      ..lineTo(67, 60)
+      ..lineTo(29, 60)
+      ..close();
+    canvas.drawPath(
+      building,
+      ui.Paint()
+        ..color = const ui.Color(0xFFB39DDB)
+        ..style = ui.PaintingStyle.fill
+        ..isAntiAlias = true,
+    );
+    final ui.Paint details = ui.Paint()
+      ..color = const ui.Color(0xFF00E5FF)
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeJoin = ui.StrokeJoin.round
+      ..isAntiAlias = true;
+    canvas.drawLine(const ui.Offset(48, 27), const ui.Offset(48, 39), details);
+    canvas.drawLine(const ui.Offset(29, 38), const ui.Offset(67, 38), details);
+    canvas.drawRect(
+      const ui.Rect.fromLTRB(44, 47, 53, 60),
+      ui.Paint()
+        ..color = const ui.Color(0xFF0B0B0F)
+        ..style = ui.PaintingStyle.fill,
+    );
+    canvas.drawRect(
+      const ui.Rect.fromLTRB(34, 43, 40, 49),
+      ui.Paint()..color = const ui.Color(0xFF0B0B0F),
+    );
+    canvas.drawRect(
+      const ui.Rect.fromLTRB(56, 43, 62, 49),
+      ui.Paint()..color = const ui.Color(0xFF0B0B0F),
+    );
+
+    final ui.Picture picture = recorder.endRecording();
+    try {
+      final ui.Image image = await picture.toImage(
+        width.toInt(),
+        height.toInt(),
+      );
+      try {
+        final ByteData? data = await image.toByteData(
+          format: ui.ImageByteFormat.png,
+        );
+        if (data == null) {
+          throw StateError('Could not render the warehouse marker icon.');
+        }
+        return data.buffer.asUint8List(
+          data.offsetInBytes,
+          data.lengthInBytes,
+        );
+      } finally {
+        image.dispose();
+      }
+    } finally {
+      picture.dispose();
+    }
+  }
+
+  void _onWarehouseSymbolTapped(maplibre.Symbol symbol) {
+    final Object? warehouseId = symbol.data?['warehouseId'];
+    if (warehouseId is String) {
+      unawaited(_showWarehouseDetails(warehouseId));
+    }
+  }
+
+  Future<void> _showWarehouseDetails(String warehouseId) async {
+    final Warehouse? warehouse;
+    try {
+      warehouse = await _warehouseService.getById(warehouseId);
+    } on Exception catch (error) {
+      _showMessage('Warehouse details could not be loaded: $error');
+      return;
+    }
+    if (!mounted) return;
+    if (warehouse == null) {
+      _showMessage('This warehouse is no longer available.');
+      return;
+    }
+    final Warehouse loadedWarehouse = warehouse;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _WarehouseMapDetails(warehouse: loadedWarehouse),
+    );
+  }
+
+  void _requestWarehouseMarkerRefresh() {
+    unawaited(_refreshMapAnnotations());
   }
 
   void _openMenu() {
@@ -1028,18 +1398,31 @@ class _MapPageState extends State<MapPage> {
         reverseDuration: Duration(milliseconds: 320),
       ),
       builder: (sheetContext) => _MapMenuSheet(
-        onWarehouse: () =>
-            _closeMenuWithPage(sheetContext, const WarehousePage()),
-        onTruckRegistration: () =>
-            _closeMenuWithPage(sheetContext, const TruckRegistrationPage()),
+        onWarehouse: () => _closeMenuWithPage(
+          sheetContext,
+          WarehousePage(onWarehousesChanged: _requestWarehouseMarkerRefresh),
+        ),
+        onTruckRegistration: () => _closeMenuWithPage(
+          sheetContext,
+          TruckRegistrationPage(
+            warehouseManagementPageBuilder: () => WarehousePage(
+              onWarehousesChanged: _requestWarehouseMarkerRefresh,
+            ),
+          ),
+        ),
         onAbout: () => _closeMenuWithAction(sheetContext, _showAbout),
       ),
     );
   }
 
   void _openProfile() {
-    Navigator.of(context)
-        .push(MaterialPageRoute<void>(builder: (_) => const ProfileMenu()));
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ProfileMenu(
+          onWarehousesChanged: _requestWarehouseMarkerRefresh,
+        ),
+      ),
+    );
   }
 
   void _closeMenuWithPage(BuildContext sheetContext, Widget page) {
@@ -1198,11 +1581,12 @@ class _MapPageState extends State<MapPage> {
                               style: const TextStyle(color: textColor),
                             ),
                             onTap: () {
-                              final String placeName = suggestion.displayName;
-                              _searchController.text = placeName;
-                              _hideSuggestions();
-                              FocusScope.of(context).unfocus();
-                              unawaited(_searchPlace(placeName));
+                              unawaited(
+                                _selectPlace(
+                                  suggestion,
+                                  query: suggestion.displayName,
+                                ),
+                              );
                             },
                           );
                         },
@@ -1260,15 +1644,19 @@ class _MapPageState extends State<MapPage> {
                 scrollController: scrollController,
                 name: selectedName,
                 address: _searchedAddress,
+                isSaved: _isSelectedPlaceSaved,
+                isSaving: _isSavingSelectedPlace,
                 onDirections: _openRoutePlanner,
                 onShare: _shareSelectedPlace,
                 onDetails: _showPlaceDetails,
+                onSavePlace: _saveSelectedPlace,
               );
             }
             return _ProjectPanel(
               scrollController: scrollController,
-              onAction: _showMessage,
               onPlanRoute: () => unawaited(_openRoutePlanner()),
+              onSavedPlaces: _openSavedPlaces,
+              onRecentSearches: _openRecentSearches,
               onTrackDelivery: () {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
@@ -1683,17 +2071,23 @@ class _SelectedPlacePanel extends StatelessWidget {
     required this.scrollController,
     required this.name,
     required this.address,
+    required this.isSaved,
+    required this.isSaving,
     required this.onDirections,
     required this.onShare,
     required this.onDetails,
+    required this.onSavePlace,
   });
 
   final ScrollController scrollController;
   final String name;
   final String? address;
+  final bool isSaved;
+  final bool isSaving;
   final VoidCallback onDirections;
   final VoidCallback onShare;
   final VoidCallback onDetails;
+  final VoidCallback onSavePlace;
 
   @override
   Widget build(BuildContext context) {
@@ -1823,6 +2217,36 @@ class _SelectedPlacePanel extends StatelessWidget {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: OutlinedButton.icon(
+                      onPressed: isSaved || isSaving ? null : onSavePlace,
+                      icon: isSaving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: purple,
+                              ),
+                            )
+                          : Icon(
+                              isSaved
+                                  ? Icons.bookmark_rounded
+                                  : Icons.bookmark_border_rounded,
+                            ),
+                      label: Text(isSaved ? 'Saved' : 'Save place'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: purple,
+                        side: const BorderSide(color: borderColor),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1991,17 +2415,102 @@ class _PlaceDetailRow extends StatelessWidget {
   }
 }
 
+class _WarehouseMapDetails extends StatelessWidget {
+  const _WarehouseMapDetails({required this.warehouse});
+
+  final Warehouse warehouse;
+
+  @override
+  Widget build(BuildContext context) {
+    final double? latitude = warehouse.latitude;
+    final double? longitude = warehouse.longitude;
+    final String coordinates =
+        latitude == null || longitude == null
+        ? 'Location unavailable'
+        : '${latitude.toStringAsFixed(6)}, ${longitude.toStringAsFixed(6)}';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(22, 12, 22, 26),
+      decoration: const BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border.fromBorderSide(BorderSide(color: borderColor)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 42,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: borderColor,
+                  borderRadius: BorderRadius.circular(5),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Warehouse',
+              style: TextStyle(
+                color: mutedColor,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.1,
+              ),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              warehouse.name,
+              style: const TextStyle(
+                color: textColor,
+                fontSize: 21,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _PlaceDetailRow(
+              icon: Icons.qr_code_rounded,
+              value: warehouse.code,
+            ),
+            const SizedBox(height: 13),
+            _PlaceDetailRow(
+              icon: Icons.location_on_outlined,
+              value: warehouse.address,
+            ),
+            const SizedBox(height: 13),
+            _PlaceDetailRow(
+              icon: Icons.person_outline_rounded,
+              value:
+                  '${warehouse.contactName} · ${warehouse.contactNumber}',
+            ),
+            const SizedBox(height: 13),
+            _PlaceDetailRow(
+              icon: Icons.my_location_rounded,
+              value: coordinates,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ProjectPanel extends StatelessWidget {
   const _ProjectPanel({
     required this.scrollController,
-    required this.onAction,
     required this.onPlanRoute,
+    required this.onSavedPlaces,
+    required this.onRecentSearches,
     required this.onTrackDelivery,
   });
 
   final ScrollController scrollController;
-  final ValueChanged<String> onAction;
   final VoidCallback onPlanRoute;
+  final VoidCallback onSavedPlaces;
+  final VoidCallback onRecentSearches;
   final VoidCallback onTrackDelivery;
 
   @override
@@ -2086,7 +2595,7 @@ class _ProjectPanel extends StatelessWidget {
                     icon: Icons.bookmark_border_rounded,
                     title: 'Saved places',
                     subtitle: 'Keep favourite destinations',
-                    onTap: () => onAction('Saved places are coming soon.'),
+                    onTap: onSavedPlaces,
                   ),
                   _ProjectActionCard(
                     icon: Icons.local_shipping_outlined,
@@ -2098,7 +2607,7 @@ class _ProjectPanel extends StatelessWidget {
                     icon: Icons.history_rounded,
                     title: 'Recent searches',
                     subtitle: 'Return to a previous place',
-                    onTap: () => onAction('Recent searches are coming soon.'),
+                    onTap: onRecentSearches,
                   ),
                 ]),
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(

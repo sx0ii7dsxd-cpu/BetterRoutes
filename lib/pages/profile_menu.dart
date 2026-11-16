@@ -2,10 +2,17 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import '../models/user_profile_model.dart';
+import '../services/user_profile_service.dart';
+import 'business_management_page.dart';
 import 'email_change_page.dart';
+import 'truck_registration_page.dart';
+import 'warehouse_page.dart';
 
 class ProfileMenu extends StatelessWidget {
-  const ProfileMenu({super.key});
+  const ProfileMenu({super.key, this.onWarehousesChanged});
+
+  final VoidCallback? onWarehousesChanged;
 
   static const Color _background = Color(0xFF17131F);
   static const Color _purple = Color(0xFFB39DDB);
@@ -41,7 +48,13 @@ class ProfileMenu extends StatelessWidget {
                 style: TextStyle(color: _muted, fontSize: 16),
               ),
             )
-          : SafeArea(top: false, child: _ProfileContent(user: user)),
+          : SafeArea(
+              top: false,
+              child: _ProfileContent(
+                user: user,
+                onWarehousesChanged: onWarehousesChanged,
+              ),
+            ),
     );
   }
 
@@ -53,15 +66,6 @@ class ProfileMenu extends StatelessWidget {
     if (email.isNotEmpty) return email.split('@').first;
 
     return 'My account';
-  }
-
-  static String _providerName(User user) {
-    final Set<String> providerIds = user.providerData
-        .map((UserInfo info) => info.providerId)
-        .toSet();
-    if (providerIds.contains('google.com')) return 'Google';
-    if (providerIds.contains('password')) return 'Email and password';
-    return providerIds.isEmpty ? 'Account' : providerIds.join(', ');
   }
 
   static Future<void> _signOut(BuildContext context) async {
@@ -87,16 +91,53 @@ class ProfileMenu extends StatelessWidget {
 }
 
 class _ProfileContent extends StatefulWidget {
-  const _ProfileContent({required this.user});
+  const _ProfileContent({required this.user, this.onWarehousesChanged});
 
   final User user;
+  final VoidCallback? onWarehousesChanged;
 
   @override
   State<_ProfileContent> createState() => _ProfileContentState();
 }
 
 class _ProfileContentState extends State<_ProfileContent> {
+  final UserProfileService _profileService = UserProfileService.local();
+  UserProfile? _profile;
   String? _updatedEmail;
+  String? _profileError;
+  bool _isLoadingProfile = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final UserProfile profile = await _profileService.saveFromAuthentication(
+        uid: widget.user.uid,
+        displayName: widget.user.displayName,
+        email: widget.user.email,
+        photoUrl: widget.user.photoURL,
+        providerIds: widget.user.providerData
+            .map((UserInfo info) => info.providerId)
+            .toList(growable: false),
+      );
+      if (!mounted) return;
+      setState(() {
+        _profile = profile;
+        _profileError = null;
+        _isLoadingProfile = false;
+      });
+    } on Exception catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _profileError = 'Local profile could not be loaded: $error';
+        _isLoadingProfile = false;
+      });
+    }
+  }
 
   Future<void> _changeEmail() async {
     final String? currentEmail = _updatedEmail ?? widget.user.email;
@@ -114,11 +155,64 @@ class _ProfileContentState extends State<_ProfileContent> {
     );
     if (!mounted || updatedEmail == null) return;
     setState(() => _updatedEmail = updatedEmail);
+    try {
+      final UserProfile profile = await _profileService.saveFromAuthentication(
+        uid: widget.user.uid,
+        displayName: widget.user.displayName,
+        email: updatedEmail,
+        photoUrl: widget.user.photoURL,
+        providerIds: widget.user.providerData
+            .map((UserInfo info) => info.providerId)
+            .toList(growable: false),
+      );
+      if (mounted) setState(() => _profile = profile);
+    } on Exception catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Updated email could not be saved locally: $error'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _manageBusinesses() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => BusinessManagementPage(
+          ownerUid: widget.user.uid,
+          truckManagementPageBuilder: (business) => TruckRegistrationPage(
+            businessIdFilter: business.id,
+            businessNameFilter: business.name,
+            warehouseManagementPageBuilder: () =>
+                WarehousePage(onWarehousesChanged: widget.onWarehousesChanged),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String get _displayName {
+    final String savedName = _profile?.displayName.trim() ?? '';
+    return savedName.isEmpty
+        ? ProfileMenu._displayName(widget.user)
+        : savedName;
+  }
+
+  String get _providerName {
+    final Set<String> providerIds =
+        _profile?.providerIds.toSet() ??
+        widget.user.providerData
+            .map((UserInfo info) => info.providerId)
+            .toSet();
+    if (providerIds.contains('google.com')) return 'Google';
+    if (providerIds.contains('password')) return 'Email and password';
+    return providerIds.isEmpty ? 'Account' : providerIds.join(', ');
   }
 
   @override
   Widget build(BuildContext context) {
-    final String? email = _updatedEmail ?? widget.user.email;
+    final String? email = _updatedEmail ?? _profile?.email ?? widget.user.email;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       child: Center(
@@ -167,7 +261,7 @@ class _ProfileContentState extends State<_ProfileContent> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            ProfileMenu._displayName(widget.user),
+                            _displayName,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -196,6 +290,24 @@ class _ProfileContentState extends State<_ProfileContent> {
                   ],
                 ),
               ),
+              if (_isLoadingProfile) ...[
+                const SizedBox(height: 10),
+                const LinearProgressIndicator(
+                  color: ProfileMenu._purple,
+                  backgroundColor: ProfileMenu._border,
+                ),
+              ],
+              if (_profileError != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _profileError!,
+                  style: const TextStyle(
+                    color: Color(0xFFE58B9B),
+                    fontSize: 12,
+                  ),
+                ),
+                TextButton(onPressed: _loadProfile, child: const Text('Retry')),
+              ],
               const SizedBox(height: 28),
               const Text(
                 'ACCOUNT DETAILS',
@@ -218,7 +330,7 @@ class _ProfileContentState extends State<_ProfileContent> {
                     _ProfileDetail(
                       icon: Icons.person_outline_rounded,
                       label: 'Name',
-                      value: ProfileMenu._displayName(widget.user),
+                      value: _displayName,
                       showDivider: true,
                     ),
                     if (email != null && email.isNotEmpty)
@@ -233,13 +345,31 @@ class _ProfileContentState extends State<_ProfileContent> {
                     _ProfileDetail(
                       icon: Icons.verified_user_outlined,
                       label: 'Sign-in method',
-                      value: ProfileMenu._providerName(widget.user),
+                      value: _providerName,
                       showDivider: false,
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 24),
+              OutlinedButton.icon(
+                onPressed: _manageBusinesses,
+                icon: const Icon(Icons.business_outlined, size: 19),
+                label: const Text('Manage business profiles'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: ProfileMenu._purple,
+                  side: const BorderSide(color: ProfileMenu._border),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: () => ProfileMenu._signOut(context),
                 icon: const Icon(Icons.logout_rounded, size: 19),

@@ -142,12 +142,14 @@ void main() {
     WidgetTester tester,
   ) async {
     final List<Uri> requests = [];
+    final List<PlaceSearchResult> selectedDestinations = [];
     final MockClient client = MockClient((request) async {
       requests.add(request.url);
       return http.Response(
         jsonEncode({
           'features': [
             {
+              'id': 'place.123',
               'text': 'Mysuru',
               'place_name': 'Mysuru, Karnataka, India',
               'center': [76.6394, 12.2958],
@@ -177,6 +179,7 @@ void main() {
             longitude: 75.7902,
           ),
           placeSearchService: searchService,
+          onDestinationSelected: selectedDestinations.add,
         ),
       ),
     );
@@ -202,6 +205,7 @@ void main() {
     await tester.tap(find.widgetWithText(ListTile, 'Mysuru'));
     await tester.pumpAndSettle();
     expect(fieldAt(0).controller!.text, 'Mysuru, Karnataka, India');
+    expect(selectedDestinations, isEmpty);
 
     await tester.tap(find.byTooltip('Swap starting point and destination'));
     await tester.pump();
@@ -218,6 +222,8 @@ void main() {
     await tester.tap(find.widgetWithText(ListTile, 'Mysuru'));
     await tester.pumpAndSettle();
     expect(fieldAt(1).controller!.text, 'Mysuru, Karnataka, India');
+    expect(selectedDestinations, hasLength(1));
+    expect(selectedDestinations.single.placeId, 'place.123');
 
     await tester.pumpWidget(const SizedBox.shrink());
     client.close();

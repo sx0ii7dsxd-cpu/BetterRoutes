@@ -22,6 +22,7 @@ class RoutePlanningPage extends StatefulWidget {
     this.viaStops = const [],
     this.placeSearchService,
     this.routeCalculationService,
+    this.onDestinationSelected,
     super.key,
   });
 
@@ -30,6 +31,7 @@ class RoutePlanningPage extends StatefulWidget {
   final List<PlaceSearchResult> viaStops;
   final PlaceSearchService? placeSearchService;
   final RouteCalculationService? routeCalculationService;
+  final ValueChanged<PlaceSearchResult>? onDestinationSelected;
 
   @override
   State<RoutePlanningPage> createState() => _RoutePlanningPageState();
@@ -285,6 +287,7 @@ class _RoutePlanningPageState extends State<RoutePlanningPage> {
       _isLoadingSuggestions = false;
     });
     FocusScope.of(context).unfocus();
+    if (field.isTo) widget.onDestinationSelected?.call(result);
   }
 
   void _clearField(_RouteField field) {

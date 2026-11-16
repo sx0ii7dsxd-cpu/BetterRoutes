@@ -3,21 +3,9 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-class PlaceSearchResult {
-  const PlaceSearchResult({
-    required this.name,
-    required this.displayName,
-    required this.latitude,
-    required this.longitude,
-    this.address,
-  });
+import '../models/place_search_result.dart';
 
-  final String name;
-  final String displayName;
-  final String? address;
-  final double latitude;
-  final double longitude;
-}
+export '../models/place_search_result.dart';
 
 class PlaceSearchException implements Exception {
   const PlaceSearchException(this.message);
@@ -130,6 +118,9 @@ class PlaceSearchService {
           address: address?.isEmpty == true ? null : address,
           latitude: latitude,
           longitude: longitude,
+          placeId: feature['id'] is String
+              ? feature['id'] as String
+              : null,
         ),
       );
     }

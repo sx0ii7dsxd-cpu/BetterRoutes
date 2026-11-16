@@ -1,9 +1,29 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 
-import 'map_page.dart';
+import '../models/truck_model.dart';
+import '../models/warehouse_model.dart';
+import '../services/truck_service.dart';
+import '../services/warehouse_service.dart';
+import '../theme/app_colors.dart';
+import 'truck_details_page.dart';
+import 'truck_registration_page.dart';
+import 'warehouse_location_picker.dart';
 
 class WarehousePage extends StatefulWidget {
-  const WarehousePage({super.key});
+  const WarehousePage({
+    super.key,
+    this.service,
+    this.truckService,
+    this.ownerUid,
+    this.onWarehousesChanged,
+  });
+
+  final WarehouseService? service;
+  final TruckService? truckService;
+  final String? ownerUid;
+  final VoidCallback? onWarehousesChanged;
 
   @override
   State<WarehousePage> createState() => _WarehousePageState();
@@ -11,48 +31,272 @@ class WarehousePage extends StatefulWidget {
 
 class _WarehousePageState extends State<WarehousePage> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _searchController = TextEditingController();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _contactNameController = TextEditingController();
   final TextEditingController _contactNumberController =
       TextEditingController();
-  final TextEditingController _locationController = TextEditingController();
+  final TextEditingController _locationNoteController = TextEditingController();
 
-  _WarehouseDetails? _warehouse;
+  late final WarehouseService _service =
+      widget.service ?? WarehouseService.local();
+  late final TruckService _truckService =
+      widget.truckService ?? TruckService.local();
+  List<Warehouse> _warehouses = [];
+  Map<String, List<Truck>> _trucksByWarehouse = {};
+  Warehouse? _editingWarehouse;
+  LatLng? _selectedLocation;
   bool _isShowingForm = false;
+  bool _isLoading = true;
+  String? _loadError;
+  int _loadGeneration = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWarehouses();
+  }
 
   @override
   void dispose() {
+    _searchController.dispose();
     _nameController.dispose();
     _addressController.dispose();
     _contactNameController.dispose();
     _contactNumberController.dispose();
-    _locationController.dispose();
+    _locationNoteController.dispose();
     super.dispose();
   }
 
-  void _openRegistrationForm() {
-    setState(() => _isShowingForm = true);
+  Future<void> _loadWarehouses({String? query}) async {
+    final int generation = ++_loadGeneration;
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
+    try {
+      final List<Warehouse> warehouses = (query == null || query.isEmpty)
+          ? await _service.getAll()
+          : await _service.search(query);
+      final String? ownerUid =
+          widget.ownerUid ?? FirebaseAuth.instance.currentUser?.uid;
+      final List<Truck> trucks = ownerUid == null
+          ? <Truck>[]
+          : await _truckService.getForOwner(ownerUid);
+      final Map<String, List<Truck>> trucksByWarehouse = {};
+      for (final Truck truck in trucks) {
+        trucksByWarehouse
+            .putIfAbsent(truck.warehouseId, () => <Truck>[])
+            .add(truck);
+      }
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _warehouses = warehouses;
+        _trucksByWarehouse = trucksByWarehouse;
+        _isLoading = false;
+      });
+    } on Exception catch (error) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loadError = 'Warehouses could not be loaded: $error';
+        _isLoading = false;
+      });
+    }
   }
 
-  void _registerWarehouse() {
+  void _openAddForm() {
+    _clearForm();
+    setState(() {
+      _editingWarehouse = null;
+      _selectedLocation = null;
+      _isShowingForm = true;
+    });
+  }
+
+  void _openEditForm(Warehouse warehouse) {
+    _nameController.text = warehouse.name;
+    _addressController.text = warehouse.address;
+    _contactNameController.text = warehouse.contactName;
+    _contactNumberController.text = warehouse.contactNumber;
+    _locationNoteController.text = warehouse.locationNote;
+    setState(() {
+      _editingWarehouse = warehouse;
+      _selectedLocation =
+          warehouse.latitude != null && warehouse.longitude != null
+          ? LatLng(warehouse.latitude!, warehouse.longitude!)
+          : null;
+      _isShowingForm = true;
+    });
+  }
+
+  void _clearForm() {
+    _nameController.clear();
+    _addressController.clear();
+    _contactNameController.clear();
+    _contactNumberController.clear();
+    _locationNoteController.clear();
+  }
+
+  Future<void> _openLocationPicker() async {
+    final LatLng? selectedLocation = await Navigator.of(context).push<LatLng>(
+      MaterialPageRoute<LatLng>(
+        builder: (_) => WarehouseLocationPicker(
+          initialLatitude: _selectedLocation?.latitude,
+          initialLongitude: _selectedLocation?.longitude,
+        ),
+      ),
+    );
+    if (!mounted || selectedLocation == null) return;
+    setState(() => _selectedLocation = selectedLocation);
+  }
+
+  Future<void> _saveWarehouse() async {
     if (!_formKey.currentState!.validate()) return;
+    final LatLng? location = _selectedLocation;
+    if (location == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pin the warehouse location first.')),
+      );
+      return;
+    }
 
     FocusScope.of(context).unfocus();
-    setState(() {
-      _warehouse = _WarehouseDetails(
-        name: _nameController.text.trim(),
-        address: _addressController.text.trim(),
-        contactName: _contactNameController.text.trim(),
-        contactNumber: _contactNumberController.text.trim(),
-        location: _locationController.text.trim(),
-        code: 'WH-${DateTime.now().millisecondsSinceEpoch % 1000000}',
-      );
-      _isShowingForm = false;
-    });
+    try {
+      final Warehouse? existing = _editingWarehouse;
+      if (existing == null) {
+        await _service.create(
+          name: _nameController.text,
+          address: _addressController.text,
+          contactName: _contactNameController.text,
+          contactNumber: _contactNumberController.text,
+          locationNote: _locationNoteController.text,
+          latitude: location.latitude,
+          longitude: location.longitude,
+        );
+      } else {
+        await _service.update(
+          existing: existing,
+          name: _nameController.text,
+          address: _addressController.text,
+          contactName: _contactNameController.text,
+          contactNumber: _contactNumberController.text,
+          locationNote: _locationNoteController.text,
+          latitude: location.latitude,
+          longitude: location.longitude,
+        );
+      }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Warehouse registered successfully.')),
+      widget.onWarehousesChanged?.call();
+      if (!mounted) return;
+      setState(() => _isShowingForm = false);
+      await _loadWarehouses(query: _searchController.text);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            existing == null
+                ? 'Warehouse registered successfully.'
+                : 'Warehouse updated successfully.',
+          ),
+        ),
+      );
+    } on Exception catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Warehouse could not be saved: $error')),
+      );
+    }
+  }
+
+  Future<void> _confirmDelete(Warehouse warehouse) async {
+    final bool confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) => AlertDialog(
+            backgroundColor: surface,
+            title: const Text(
+              'Delete warehouse?',
+              style: TextStyle(color: textColor),
+            ),
+            content: Text(
+              'Delete "${warehouse.name}"? This cannot be undone. '
+              'Warehouses referenced by other records cannot be deleted.',
+              style: const TextStyle(color: mutedColor),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text(
+                  'Delete',
+                  style: TextStyle(color: Color(0xFFE58B9B)),
+                ),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+
+    try {
+      await _service.delete(warehouse.id);
+      widget.onWarehousesChanged?.call();
+      if (mounted && _editingWarehouse?.id == warehouse.id) {
+        setState(() {
+          _editingWarehouse = null;
+          _isShowingForm = false;
+        });
+      }
+      await _loadWarehouses(query: _searchController.text);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Warehouse deleted.')));
+    } on Exception catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Warehouse could not be deleted. It may be referenced by '
+            'another record. $error',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _openWarehouseTrucks(Warehouse warehouse) async {
+    final String? ownerUid =
+        widget.ownerUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (ownerUid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to manage trucks.')),
+      );
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => TruckRegistrationPage(
+          warehouseIdFilter: warehouse.id,
+          warehouseNameFilter: warehouse.name,
+          warehouseManagementPageBuilder: () => WarehousePage(
+            onWarehousesChanged: widget.onWarehousesChanged,
+          ),
+        ),
+      ),
+    );
+    if (mounted) {
+      await _loadWarehouses(query: _searchController.text);
+    }
+  }
+
+  Future<void> _openTruckDetails(Truck truck) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => TruckDetailsPage(truck: truck)),
     );
   }
 
@@ -81,9 +325,7 @@ class _WarehousePageState extends State<WarehousePage> {
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
-              child: _isShowingForm
-                  ? _buildRegistrationForm()
-                  : _buildDashboard(),
+              child: _isShowingForm ? _buildForm() : _buildDashboard(),
             ),
           ),
         ),
@@ -92,140 +334,126 @@ class _WarehousePageState extends State<WarehousePage> {
   }
 
   Widget _buildDashboard() {
-    final warehouse = _warehouse;
-    if (warehouse == null) {
-      return _buildEmptyState();
-    }
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _SectionHeading(
           eyebrow: 'WAREHOUSE OVERVIEW',
-          title: warehouse.name,
-          subtitle: 'Your warehouse is ready to manage.',
+          title:
+              '${_warehouses.length} '
+              '${_warehouses.length == 1 ? 'warehouse' : 'warehouses'}',
+          subtitle: 'Create and manage your warehouse locations.',
           icon: Icons.warehouse_rounded,
         ),
         const SizedBox(height: 20),
-        _buildWarehouseCard(warehouse),
-        const SizedBox(height: 28),
-        const _SectionHeading(
-          eyebrow: 'ASSOCIATED TRUCKS',
-          title: 'Truck activity',
-          subtitle: 'Review trucks linked to this warehouse.',
-          icon: Icons.local_shipping_rounded,
+        TextField(
+          controller: _searchController,
+          onChanged: (String query) => _loadWarehouses(query: query),
+          style: const TextStyle(color: textColor),
+          cursorColor: purple,
+          decoration: InputDecoration(
+            hintText: 'Search name, code, address, or contact',
+            hintStyle: const TextStyle(color: mutedColor, fontSize: 13),
+            prefixIcon: const Icon(Icons.search_rounded, color: purple),
+            filled: true,
+            fillColor: surface,
+            border: _inputBorder(),
+            enabledBorder: _inputBorder(),
+            focusedBorder: _inputBorder(color: purple),
+          ),
         ),
-        const SizedBox(height: 14),
-        _buildTruckSection(
-          title: 'Approved trucks',
-          subtitle: 'No approved trucks yet.',
-          icon: Icons.check_circle_outline_rounded,
-          color: const Color(0xFF5CC6A3),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 52,
+          child: ElevatedButton.icon(
+            onPressed: _openAddForm,
+            icon: const Icon(Icons.add_business_rounded),
+            label: const Text('Add Warehouse'),
+            style: _primaryButtonStyle(),
+          ),
         ),
-        const SizedBox(height: 12),
-        _buildTruckSection(
-          title: 'Pending requests',
-          subtitle: 'No pending registration requests.',
-          icon: Icons.pending_actions_rounded,
-          color: purple,
-        ),
-        const SizedBox(height: 12),
-        _buildTruckSection(
-          title: 'Rejected requests',
-          subtitle: 'No rejected requests.',
-          icon: Icons.cancel_outlined,
-          color: const Color(0xFFE58B9B),
-        ),
-        const SizedBox(height: 24),
-        OutlinedButton.icon(
-          onPressed: () => setState(() => _isShowingForm = true),
-          icon: const Icon(Icons.edit_outlined),
-          label: const Text('Update warehouse details'),
-          style: _outlinedButtonStyle(),
-        ),
+        const SizedBox(height: 20),
+        if (_isLoading)
+          const Padding(
+            padding: EdgeInsets.all(28),
+            child: Center(child: CircularProgressIndicator(color: purple)),
+          )
+        else if (_loadError != null)
+          _ErrorCard(
+            message: _loadError!,
+            onRetry: () => _loadWarehouses(query: _searchController.text),
+          )
+        else if (_warehouses.isEmpty)
+          _buildEmptyState()
+        else
+          ..._warehouses.map(
+            (Warehouse warehouse) => Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: _buildWarehouseCard(warehouse),
+            ),
+          ),
       ],
     );
   }
 
   Widget _buildEmptyState() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SizedBox(height: 24),
-        Container(
-          padding: const EdgeInsets.fromLTRB(24, 30, 24, 26),
-          decoration: BoxDecoration(
-            color: surface,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: borderColor),
+    final bool isSearching = _searchController.text.trim().isNotEmpty;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 30, 24, 26),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: const BoxDecoration(
+              color: Color(0xFF302544),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.warehouse_rounded, color: purple, size: 42),
           ),
-          child: Column(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF302544),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.warehouse_rounded,
-                  color: purple,
-                  size: 42,
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'No warehouse registered yet',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'Register your warehouse to manage its details and review '
-                'associated truck requests in one place.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: mutedColor, height: 1.5),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: ElevatedButton.icon(
-                  onPressed: _openRegistrationForm,
-                  icon: const Icon(Icons.add_business_rounded),
-                  label: const Text('Register Warehouse'),
-                  style: _primaryButtonStyle(),
-                ),
-              ),
-            ],
+          const SizedBox(height: 20),
+          Text(
+            isSearching ? 'No matching warehouses' : 'No warehouses yet',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: textColor,
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-        const SizedBox(height: 28),
-        const _SectionHeading(
-          eyebrow: 'TRUCK ACTIVITY',
-          title: 'Associated trucks',
-          subtitle: 'Truck requests will appear here after registration.',
-          icon: Icons.local_shipping_outlined,
-        ),
-      ],
+          const SizedBox(height: 10),
+          Text(
+            isSearching
+                ? 'Try another name, code, address, or contact.'
+                : 'Add a warehouse and pin its location to get started.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: mutedColor, height: 1.5),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildRegistrationForm() {
+  Widget _buildForm() {
+    final bool isEditing = _editingWarehouse != null;
     return Form(
       key: _formKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const _SectionHeading(
-            eyebrow: 'WAREHOUSE REGISTRATION',
-            title: 'Add your warehouse',
-            subtitle: 'Enter the details used to identify and contact it.',
-            icon: Icons.add_business_rounded,
+          _SectionHeading(
+            eyebrow: isEditing ? 'WAREHOUSE DETAILS' : 'WAREHOUSE REGISTRATION',
+            title: isEditing ? 'Edit warehouse' : 'Add your warehouse',
+            subtitle: isEditing
+                ? 'Update its details or confirm a new map pin.'
+                : 'Enter its details and pin the warehouse on the map.',
+            icon: isEditing
+                ? Icons.edit_location_alt_rounded
+                : Icons.add_business_rounded,
           ),
           const SizedBox(height: 24),
           _WarehouseField(
@@ -263,28 +491,66 @@ class _WarehousePageState extends State<WarehousePage> {
           ),
           const SizedBox(height: 15),
           _WarehouseField(
-            controller: _locationController,
-            label: 'Warehouse location',
-            hint: 'Optional location note or landmark',
-            icon: Icons.my_location_rounded,
+            controller: _locationNoteController,
+            label: 'Location note (optional)',
+            hint: 'Landmark or additional directions',
+            icon: Icons.notes_rounded,
             textInputAction: TextInputAction.done,
           ),
-          const SizedBox(height: 12),
-          const Text(
-            'Warehouse location can be connected to the map and Firestore '
-            'data model in a later phase.',
-            style: TextStyle(color: mutedColor, fontSize: 12, height: 1.4),
+          const SizedBox(height: 20),
+          SizedBox(
+            height: 54,
+            child: ElevatedButton.icon(
+              onPressed: _openLocationPicker,
+              icon: const Icon(Icons.add_location_alt_rounded),
+              label: Text(
+                _selectedLocation == null ? 'Pin Location' : 'Change Pin',
+              ),
+              style: _primaryButtonStyle(),
+            ),
           ),
+          if (_selectedLocation case final LatLng location) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Pinned: ${location.latitude.toStringAsFixed(6)}, '
+              '${location.longitude.toStringAsFixed(6)}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: mutedColor, fontSize: 13),
+            ),
+          ] else ...[
+            const SizedBox(height: 10),
+            const Text(
+              'A confirmed map pin is required before saving.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: mutedColor, fontSize: 13),
+            ),
+          ],
           const SizedBox(height: 24),
           SizedBox(
             height: 54,
             child: ElevatedButton.icon(
-              onPressed: _registerWarehouse,
-              icon: const Icon(Icons.check_rounded),
-              label: const Text('Register Warehouse'),
+              onPressed: _saveWarehouse,
+              icon: Icon(isEditing ? Icons.save_rounded : Icons.check_rounded),
+              label: Text(isEditing ? 'Save Changes' : 'Register Warehouse'),
               style: _primaryButtonStyle(),
             ),
           ),
+          if (isEditing) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _confirmDelete(_editingWarehouse!),
+              icon: const Icon(Icons.delete_outline_rounded),
+              label: const Text('Delete Warehouse'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFE58B9B),
+                side: const BorderSide(color: borderColor),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           TextButton(
             onPressed: () => setState(() => _isShowingForm = false),
@@ -295,7 +561,8 @@ class _WarehousePageState extends State<WarehousePage> {
     );
   }
 
-  Widget _buildWarehouseCard(_WarehouseDetails warehouse) {
+  Widget _buildWarehouseCard(Warehouse warehouse) {
+    final List<Truck> trucks = _trucksByWarehouse[warehouse.id] ?? const [];
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -304,6 +571,7 @@ class _WarehousePageState extends State<WarehousePage> {
         border: Border.all(color: borderColor),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
@@ -328,6 +596,18 @@ class _WarehousePageState extends State<WarehousePage> {
             ],
           ),
           const Divider(height: 28, color: borderColor),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              warehouse.name,
+              style: const TextStyle(
+                color: textColor,
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           _DetailRow(
             icon: Icons.location_on_outlined,
             label: 'Address',
@@ -338,52 +618,75 @@ class _WarehousePageState extends State<WarehousePage> {
             label: 'Contact',
             value: '${warehouse.contactName} · ${warehouse.contactNumber}',
           ),
-          if (warehouse.location.isNotEmpty)
+          if (warehouse.locationNote.isNotEmpty)
             _DetailRow(
-              icon: Icons.my_location_rounded,
-              label: 'Location',
-              value: warehouse.location,
+              icon: Icons.notes_rounded,
+              label: 'Location note',
+              value: warehouse.locationNote,
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTruckSection({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 25),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
+          _DetailRow(
+            icon: Icons.my_location_rounded,
+            label: 'Pinned coordinates',
+            value:
+                '${warehouse.latitude!.toStringAsFixed(6)}, '
+                '${warehouse.longitude!.toStringAsFixed(6)}',
+          ),
+          const Divider(height: 28, color: borderColor),
+          Row(
+            children: [
+              const Icon(Icons.local_shipping_rounded, color: purple, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Truck activity · ${trucks.length}',
                   style: const TextStyle(
                     color: textColor,
+                    fontSize: 15,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: const TextStyle(color: mutedColor, fontSize: 13),
-                ),
-              ],
+              ),
+              TextButton(
+                onPressed: () => _openWarehouseTrucks(warehouse),
+                child: const Text('Manage'),
+              ),
+            ],
+          ),
+          if (trucks.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 6, bottom: 12),
+              child: Text(
+                'No trucks are currently assigned to this warehouse.',
+                style: TextStyle(color: mutedColor, fontSize: 13),
+              ),
+            )
+          else
+            ...trucks.map(
+              (Truck truck) => _WarehouseTruckTile(
+                truck: truck,
+                onTap: () => _openTruckDetails(truck),
+              ),
             ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _openEditForm(warehouse),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Edit'),
+                  style: _outlinedButtonStyle(),
+                ),
+              ),
+              const SizedBox(width: 10),
+              IconButton(
+                onPressed: () => _confirmDelete(warehouse),
+                tooltip: 'Delete warehouse',
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Color(0xFFE58B9B),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -408,6 +711,13 @@ class _WarehousePageState extends State<WarehousePage> {
     );
   }
 
+  OutlineInputBorder _inputBorder({Color? color}) {
+    return OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: BorderSide(color: color ?? borderColor),
+    );
+  }
+
   String? _requiredValidator(String? value) {
     if (value == null || value.trim().isEmpty) {
       return 'This field is required';
@@ -416,7 +726,7 @@ class _WarehousePageState extends State<WarehousePage> {
   }
 
   String? _phoneValidator(String? value) {
-    final requiredError = _requiredValidator(value);
+    final String? requiredError = _requiredValidator(value);
     if (requiredError != null) return requiredError;
     if (value!.trim().replaceAll(RegExp(r'\D'), '').length < 7) {
       return 'Enter a valid contact number';
@@ -469,18 +779,15 @@ class _WarehouseField extends StatelessWidget {
         enabledBorder: _inputBorder(),
         focusedBorder: _inputBorder(color: purple),
         errorBorder: _inputBorder(color: const Color(0xFFE58B9B)),
-        focusedErrorBorder: _inputBorder(
-          color: const Color(0xFFE58B9B),
-          width: 1.5,
-        ),
+        focusedErrorBorder: _inputBorder(color: const Color(0xFFE58B9B)),
       ),
     );
   }
 
-  OutlineInputBorder _inputBorder({Color? color, double width = 1}) {
+  OutlineInputBorder _inputBorder({Color? color}) {
     return OutlineInputBorder(
       borderRadius: BorderRadius.circular(16),
-      borderSide: BorderSide(color: color ?? borderColor, width: width),
+      borderSide: BorderSide(color: color ?? borderColor),
     );
   }
 }
@@ -589,20 +896,91 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-class _WarehouseDetails {
-  const _WarehouseDetails({
-    required this.name,
-    required this.address,
-    required this.contactName,
-    required this.contactNumber,
-    required this.location,
-    required this.code,
-  });
+class _WarehouseTruckTile extends StatelessWidget {
+  const _WarehouseTruckTile({required this.truck, required this.onTap});
 
-  final String name;
-  final String address;
-  final String contactName;
-  final String contactNumber;
-  final String location;
-  final String code;
+  final Truck truck;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color statusColor = switch (truck.approvalStatus) {
+      'approved' => const Color(0xFF5CC6A3),
+      'rejected' => const Color(0xFFE58B9B),
+      _ => purple,
+    };
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: const Color(0xFF292332),
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+            child: Row(
+              children: [
+                const Icon(Icons.local_shipping_outlined, color: purple),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        truck.registrationNumber,
+                        style: const TextStyle(
+                          color: textColor,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '${truck.truckType} · '
+                        '${truck.businessName ?? 'Business'}',
+                        style: const TextStyle(color: mutedColor, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  truck.approvalStatus.toUpperCase(),
+                  style: TextStyle(
+                    color: statusColor,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorCard extends StatelessWidget {
+  const _ErrorCard({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Text(message, style: const TextStyle(color: textColor)),
+          TextButton(onPressed: onRetry, child: const Text('Retry')),
+        ],
+      ),
+    );
+  }
 }
