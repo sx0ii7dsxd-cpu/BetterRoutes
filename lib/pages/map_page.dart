@@ -11,6 +11,8 @@ import 'package:latlong2/latlong.dart' as latlong;
 import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
 import 'package:share_plus/share_plus.dart';
 
+import '../models/warehouse_model.dart';
+import '../services/firestore_service.dart';
 import 'place_search_service.dart';
 import 'track_shipment_page.dart';
 import 'truck_registration_page.dart';
@@ -38,6 +40,7 @@ class MapPage extends StatefulWidget {
 enum _LocationState { checking, ready, serviceDisabled, denied, deniedForever }
 
 class _MapPageState extends State<MapPage> {
+  static const double _warehouseNameZoomThreshold = 13;
   static const String _lightTileUrl =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
   static const String _darkTileUrl =
@@ -51,6 +54,7 @@ class _MapPageState extends State<MapPage> {
   static const Duration _mapLibreLoadTimeout = Duration(seconds: 30);
 
   final legacy.MapController _legacyMapController = legacy.MapController();
+  final FirestoreService _firestoreService = FirestoreService();
   final TextEditingController _searchController = TextEditingController();
   final http.Client _httpClient = http.Client();
   late final PlaceSearchService _placeSearchService = PlaceSearchService(
@@ -85,6 +89,10 @@ class _MapPageState extends State<MapPage> {
   bool _mapStyleLoaded = false;
   bool _isMapLibreActive = false;
   Timer? _mapLibreLoadTimer;
+  double _legacyZoom = 16;
+  double _mapLibreZoom = 16;
+  StreamSubscription<List<WarehouseModel>>? _warehouseSubscription;
+  List<WarehouseModel> _warehouses = const [];
 
   bool get _hasMapTilerConfig =>
       _mapTilerApiKey.trim().isNotEmpty &&
@@ -105,6 +113,7 @@ class _MapPageState extends State<MapPage> {
   @override
   void initState() {
     super.initState();
+    _subscribeToWarehouses();
     _resolveLocation();
   }
 
@@ -112,11 +121,34 @@ class _MapPageState extends State<MapPage> {
   void dispose() {
     _mapLibreLoadTimer?.cancel();
     _suggestionDebounce?.cancel();
+    unawaited(_warehouseSubscription?.cancel());
     unawaited(_navigationPositionSubscription?.cancel());
     _legacyMapController.dispose();
     _searchController.dispose();
     _httpClient.close();
     super.dispose();
+  }
+
+  void _subscribeToWarehouses() {
+    try {
+      _warehouseSubscription = _firestoreService.watchMyWarehouses().listen(
+        (warehouses) {
+          if (!mounted) return;
+          setState(() => _warehouses = warehouses);
+          if (_isMapLibreActive && _mapStyleLoaded) {
+            unawaited(_refreshMapAnnotations());
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (mounted) {
+            _showMessage('Could not load your warehouses on the map.');
+          }
+        },
+      );
+    } on StateError {
+      // Authentication routing should prevent this, but the map must remain
+      // usable if the auth state changes while it is being initialized.
+    }
   }
 
   Future<void> _resolveLocation() async {
@@ -424,6 +456,14 @@ class _MapPageState extends State<MapPage> {
         address: _searchedAddress,
         location: location,
       ),
+    );
+  }
+
+  void _showWarehouseDetails(WarehouseModel warehouse) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _WarehouseDetailsSheet(warehouse: warehouse),
     );
   }
 
@@ -857,7 +897,48 @@ class _MapPageState extends State<MapPage> {
 
   void _onMapLibreCreated(maplibre.MapLibreMapController controller) {
     _mapLibreController = controller;
+    controller.onCircleTapped.add(_onMapLibreCircleTapped);
+    controller.onSymbolTapped.add(_onMapLibreSymbolTapped);
     _startMapLibreLoadTimer();
+  }
+
+  void _onMapLibreCameraMove(maplibre.CameraPosition cameraPosition) {
+    final bool wasShowingNames =
+        _mapLibreZoom >= _warehouseNameZoomThreshold;
+    final bool willShowNames =
+        cameraPosition.zoom >= _warehouseNameZoomThreshold;
+    _mapLibreZoom = cameraPosition.zoom;
+    if (wasShowingNames != willShowNames && _mapStyleLoaded) {
+      unawaited(_refreshMapAnnotations());
+    }
+  }
+
+  void _onMapLibreCameraIdle() {
+    if (_mapStyleLoaded) {
+      unawaited(_refreshMapAnnotations());
+    }
+  }
+
+  void _onMapLibreCircleTapped(maplibre.Circle circle) {
+    final String? warehouseId = circle.data?['warehouseId'] as String?;
+    if (warehouseId == null) return;
+    for (final warehouse in _warehouses) {
+      if (warehouse.warehouseId == warehouseId) {
+        _showWarehouseDetails(warehouse);
+        return;
+      }
+    }
+  }
+
+  void _onMapLibreSymbolTapped(maplibre.Symbol symbol) {
+    final String? warehouseId = symbol.data?['warehouseId'] as String?;
+    if (warehouseId == null) return;
+    for (final warehouse in _warehouses) {
+      if (warehouse.warehouseId == warehouseId) {
+        _showWarehouseDetails(warehouse);
+        return;
+      }
+    }
   }
 
   Future<void> _toggleMapTheme() async {
@@ -940,15 +1021,16 @@ class _MapPageState extends State<MapPage> {
 
     try {
       await controller.clearCircles();
+      await controller.clearSymbols();
       final List<maplibre.CircleOptions> circles = [];
       final Position? position = _position;
       if (position != null) {
         circles.add(
           maplibre.CircleOptions(
             geometry: maplibre.LatLng(position.latitude, position.longitude),
-            circleRadius: 9,
+            circleRadius: 6,
             circleColor: '#5CC6A3',
-            circleStrokeWidth: 3,
+            circleStrokeWidth: 2,
             circleStrokeColor: '#FFFFFF',
           ),
         );
@@ -1010,6 +1092,38 @@ class _MapPageState extends State<MapPage> {
       }
       if (circles.isNotEmpty) {
         await controller.addCircles(circles);
+      }
+      final warehousesWithCoordinates = _warehouses
+          .where(
+            (warehouse) =>
+                warehouse.latitude != null && warehouse.longitude != null,
+          )
+          .toList();
+      if (warehousesWithCoordinates.isNotEmpty &&
+          _mapLibreZoom >= _warehouseNameZoomThreshold) {
+        await controller.addSymbols(
+          [
+            for (final warehouse in warehousesWithCoordinates)
+              maplibre.SymbolOptions(
+                geometry: maplibre.LatLng(
+                  warehouse.latitude!,
+                  warehouse.longitude!,
+                ),
+                textField: warehouse.name,
+                textSize: 12,
+                textMaxWidth: 14,
+                textAnchor: 'bottom',
+                textColor: _isDarkMode ? '#F7F5FC' : '#684E75',
+                textHaloColor: _isDarkMode ? '#1B2A43' : '#F4E4F7',
+                textHaloWidth: 2,
+                textHaloBlur: 0.5,
+              ),
+          ],
+          [
+            for (final warehouse in warehousesWithCoordinates)
+              {'warehouseId': warehouse.warehouseId},
+          ],
+        );
       }
     } on PlatformException {
       _fallbackToLegacyMap(
@@ -1149,6 +1263,8 @@ class _MapPageState extends State<MapPage> {
                   ),
                   onMapCreated: _onMapLibreCreated,
                   onStyleLoadedCallback: _onMapLibreStyleLoaded,
+                  onCameraMove: _onMapLibreCameraMove,
+                  onCameraIdle: _onMapLibreCameraIdle,
                   attributionButtonPosition:
                       maplibre.AttributionButtonPosition.bottomLeft,
                   logoEnabled: false,
@@ -1321,7 +1437,20 @@ class _MapPageState extends State<MapPage> {
 
     return legacy.FlutterMap(
       mapController: _legacyMapController,
-      options: legacy.MapOptions(initialCenter: here, initialZoom: 16),
+      options: legacy.MapOptions(
+        initialCenter: here,
+        initialZoom: _legacyZoom,
+        onPositionChanged: (camera, hasGesture) {
+          final bool wasShowingNames =
+              _legacyZoom >= _warehouseNameZoomThreshold;
+          final bool willShowNames =
+              camera.zoom >= _warehouseNameZoomThreshold;
+          _legacyZoom = camera.zoom;
+          if (wasShowingNames != willShowNames && mounted) {
+            setState(() {});
+          }
+        },
+      ),
       children: [
         legacy.TileLayer(
           urlTemplate: _isDarkMode ? _darkTileUrl : _lightTileUrl,
@@ -1385,6 +1514,23 @@ class _MapPageState extends State<MapPage> {
                 child: const Icon(Icons.location_pin, color: purple, size: 42),
               ),
             ],
+            for (final warehouse in _warehouses)
+              if (warehouse.latitude != null &&
+                  warehouse.longitude != null &&
+                  _legacyZoom >= _warehouseNameZoomThreshold)
+                legacy.Marker(
+                  point: latlong.LatLng(
+                    warehouse.latitude!,
+                    warehouse.longitude!,
+                  ),
+                  width: 160,
+                  height: 42,
+                  child: _WarehouseMarker(
+                    name: warehouse.name,
+                    isDarkMode: _isDarkMode,
+                    onTap: () => _showWarehouseDetails(warehouse),
+                  ),
+                ),
           ],
         ),
         if (_activeRoutePlan case final RoutePlanResult routePlan)
@@ -1545,20 +1691,71 @@ class _LocationMarker extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Container(
-        width: 15,
-        height: 15,
+        width: 11,
+        height: 11,
         decoration: BoxDecoration(
           color: const Color(0xFF5CC6A3),
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 2),
+          border: Border.all(color: Colors.white, width: 1.5),
           boxShadow: [
             BoxShadow(
               color: const Color(0xFF5CC6A3).withValues(alpha: 0.45),
-              blurRadius: 14,
-              spreadRadius: 3,
+              blurRadius: 9,
+              spreadRadius: 1,
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _WarehouseMarker extends StatelessWidget {
+  const _WarehouseMarker({
+    required this.name,
+    required this.isDarkMode,
+    required this.onTap,
+  });
+
+  final String name;
+  final bool isDarkMode;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            constraints: const BoxConstraints(maxWidth: 140),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: isDarkMode
+                  ? const Color(0xFF2A3043).withValues(alpha: 0.9)
+                  : const Color(0xFFF4E4F7).withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(
+                color: isDarkMode
+                    ? const Color(0xFF6D7180)
+                    : const Color(0xFFC9A7D3),
+              ),
+            ),
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: isDarkMode
+                    ? textColor
+                    : const Color(0xFF684E75),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1965,6 +2162,67 @@ class _PlaceDetailsSheet extends StatelessWidget {
               value:
                   '${location.latitude.toStringAsFixed(6)}, '
                   '${location.longitude.toStringAsFixed(6)}',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WarehouseDetailsSheet extends StatelessWidget {
+  const _WarehouseDetailsSheet({required this.warehouse});
+
+  final WarehouseModel warehouse;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(22, 12, 22, 26),
+      decoration: const BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        border: Border.fromBorderSide(BorderSide(color: borderColor)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 42,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: borderColor,
+                  borderRadius: BorderRadius.circular(5),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Warehouse details',
+              style: TextStyle(
+                color: textColor,
+                fontSize: 21,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _PlaceDetailRow(
+              icon: Icons.warehouse_rounded,
+              value: warehouse.name,
+            ),
+            const SizedBox(height: 13),
+            _PlaceDetailRow(
+              icon: Icons.qr_code_2_rounded,
+              value: warehouse.code,
+            ),
+            const SizedBox(height: 13),
+            _PlaceDetailRow(
+              icon: Icons.location_on_outlined,
+              value: warehouse.address,
             ),
           ],
         ),

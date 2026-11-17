@@ -96,6 +96,18 @@ class FirestoreService {
     return snapshot.docs.map(WarehouseModel.fromFirestore).toList();
   }
 
+  Stream<List<WarehouseModel>> watchMyWarehouses() {
+    final user = _requireUser();
+    return _warehouses
+        .where('ownerUid', isEqualTo: user.uid)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map(WarehouseModel.fromFirestore).toList(),
+        );
+  }
+
   Future<void> updateWarehouse({
     required WarehouseModel warehouse,
     required String name,
