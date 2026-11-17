@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/firestore_service.dart';
+import '../services/warehouse_code_generator.dart';
 import 'map_page.dart';
 
 class TruckRegistrationPage extends StatefulWidget {
@@ -60,17 +61,18 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
       await Future<void>.delayed(const Duration(milliseconds: 450));
       if (!mounted) return;
 
-      final formatIsValid = RegExp(r'^WH-[A-Z0-9]{6,20}$').hasMatch(code);
-      final warehouse = formatIsValid
-          ? await _firestoreService.findMyWarehouseByCode(code)
-          : null;
+      final isNewFormat = RegExp(warehouseCodePattern).hasMatch(code);
+      final warehouse = await _firestoreService.findMyWarehouseByCode(code);
       if (!mounted) return;
       setState(() {
         _isCheckingWarehouse = false;
         _warehouseCodeValid = warehouse != null;
         _warehouseMessage = warehouse != null
             ? 'Warehouse verified: ${warehouse.name}.'
-            : 'Enter a warehouse code belonging to your account.';
+            : isNewFormat
+                ? 'Enter a warehouse code belonging to your account.'
+                : 'Use WH-12345 for new codes, or enter an existing code '
+                    'belonging to your account.';
       });
     } catch (error) {
       if (!mounted) return;
@@ -263,7 +265,7 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
           _TruckField(
             controller: _warehouseCodeController,
             label: 'Warehouse code',
-            hint: 'e.g. WH-123456',
+            hint: 'e.g. WH-12345',
             icon: Icons.qr_code_2_rounded,
             validator: _requiredValidator,
             textCapitalization: TextCapitalization.characters,
@@ -388,8 +390,8 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
         ),
         const SizedBox(height: 18),
         const Text(
-          'Your request is stored in Firestore and remains pending until it '
-          'is reviewed.',
+          'Your request has been received and remains pending until it is '
+          'reviewed.',
           textAlign: TextAlign.center,
           style: TextStyle(color: mutedColor, fontSize: 12, height: 1.4),
         ),

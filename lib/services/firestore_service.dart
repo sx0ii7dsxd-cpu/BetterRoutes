@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/truck_registration_model.dart';
 import '../models/warehouse_model.dart';
+import 'warehouse_code_generator.dart';
 
 class FirestoreService {
   FirestoreService({
@@ -19,6 +20,9 @@ class FirestoreService {
 
   CollectionReference<Map<String, dynamic>> get _truckRequests =>
       _firestore.collection('truckRegistrationRequests');
+
+  CollectionReference<Map<String, dynamic>> get _warehouseCodeReservations =>
+      _firestore.collection('warehouseCodeReservations');
 
   User _requireUser() {
     final user = _auth.currentUser;
@@ -38,27 +42,49 @@ class FirestoreService {
     required double? longitude,
   }) async {
     final user = _requireUser();
-    final document = _warehouses.doc();
-    final warehouseId = document.id;
-    final code = 'WH-${warehouseId.toUpperCase()}';
-    final now = FieldValue.serverTimestamp();
+    for (var attempt = 0; attempt < 20; attempt++) {
+      final document = _warehouses.doc();
+      final warehouseId = document.id;
+      final code = generateWarehouseCode();
+      final reservation = _warehouseCodeReservations.doc(code);
+      final now = FieldValue.serverTimestamp();
 
-    await document.set({
-      'warehouseId': warehouseId,
-      'code': code,
-      'name': name.trim(),
-      'address': address.trim(),
-      'contactName': contactName.trim(),
-      'contactNumber': contactNumber.trim(),
-      'location': location.trim(),
-      'latitude': latitude,
-      'longitude': longitude,
-      'ownerUid': user.uid,
-      'createdAt': now,
-      'updatedAt': now,
-    });
+      try {
+        await _firestore.runTransaction((transaction) async {
+          final existingReservation = await transaction.get(reservation);
+          if (existingReservation.exists) {
+            throw const _WarehouseCodeCollision();
+          }
 
-    return WarehouseModel.fromFirestore(await document.get());
+          transaction.set(reservation, {
+            'warehouseId': warehouseId,
+            'ownerUid': user.uid,
+          });
+          transaction.set(document, {
+            'warehouseId': warehouseId,
+            'code': code,
+            'name': name.trim(),
+            'address': address.trim(),
+            'contactName': contactName.trim(),
+            'contactNumber': contactNumber.trim(),
+            'location': location.trim(),
+            'latitude': latitude,
+            'longitude': longitude,
+            'ownerUid': user.uid,
+            'createdAt': now,
+            'updatedAt': now,
+          });
+        });
+
+        return WarehouseModel.fromFirestore(await document.get());
+      } on _WarehouseCodeCollision {
+        continue;
+      }
+    }
+
+    throw StateError(
+      'Could not reserve a unique warehouse code. Please try again.',
+    );
   }
 
   Future<List<WarehouseModel>> getMyWarehouses() async {
@@ -104,9 +130,10 @@ class FirestoreService {
 
   Future<WarehouseModel?> findMyWarehouseByCode(String code) async {
     final user = _requireUser();
+    final normalizedCode = code.trim().toUpperCase();
     final snapshot = await _warehouses
         .where('ownerUid', isEqualTo: user.uid)
-        .where('code', isEqualTo: code.trim().toUpperCase())
+        .where('code', isEqualTo: normalizedCode)
         .limit(1)
         .get();
     if (snapshot.docs.isEmpty) return null;
@@ -162,4 +189,8 @@ class FirestoreService {
         .get();
     return snapshot.docs.map(TruckRegistrationModel.fromFirestore).toList();
   }
+}
+
+class _WarehouseCodeCollision implements Exception {
+  const _WarehouseCodeCollision();
 }

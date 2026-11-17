@@ -12,7 +12,14 @@ service cloud.firestore {
 
       allow create: if signedIn()
         && request.resource.data.warehouseId == warehouseId
-        && request.resource.data.ownerUid == request.auth.uid;
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.code.matches('^WH-[0-9]{5}$')
+        && getAfter(
+          /databases/$(database)/documents/warehouseCodeReservations/$(request.resource.data.code)
+        ).data.warehouseId == warehouseId
+        && getAfter(
+          /databases/$(database)/documents/warehouseCodeReservations/$(request.resource.data.code)
+        ).data.ownerUid == request.auth.uid;
 
       allow update: if signedIn()
         && resource.data.ownerUid == request.auth.uid
@@ -25,11 +32,93 @@ service cloud.firestore {
         && resource.data.ownerUid == request.auth.uid;
     }
 
+    match /warehouseCodeReservations/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && code.matches('^WH-[0-9]{5}$')
+        && request.resource.data.keys().hasOnly([
+          'warehouseId',
+          'ownerUid'
+        ])
+        && request.resource.data.keys().hasAll([
+          'warehouseId',
+          'ownerUid'
+        ])
+        && request.resource.data.warehouseId is string
+        && request.resource.data.ownerUid == request.auth.uid
+        && !exists(
+          /databases/$(database)/documents/warehouses/$(request.resource.data.warehouseId)
+        )
+        && getAfter(
+          /databases/$(database)/documents/warehouses/$(request.resource.data.warehouseId)
+        ).data.ownerUid == request.auth.uid
+        && getAfter(
+          /databases/$(database)/documents/warehouses/$(request.resource.data.warehouseId)
+        ).data.code == code
+        && getAfter(
+          /databases/$(database)/documents/warehouses/$(request.resource.data.warehouseId)
+        ).data.warehouseId == request.resource.data.warehouseId;
+      allow update, delete: if false;
+    }
+
     match /truckRegistrationRequests/{requestId} {
       allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'requestId',
+          'registrationNumber',
+          'truckType',
+          'capacity',
+          'capacityUnit',
+          'details',
+          'driverName',
+          'driverContactNumber',
+          'warehouseId',
+          'warehouseCode',
+          'requestedByUid',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.keys().hasAll([
+          'requestId',
+          'registrationNumber',
+          'truckType',
+          'capacity',
+          'driverName',
+          'driverContactNumber',
+          'warehouseId',
+          'warehouseCode',
+          'requestedByUid',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
         && request.resource.data.requestId == requestId
+        && request.resource.data.registrationNumber is string
+        && request.resource.data.truckType is string
+        && request.resource.data.capacity is number
+        && (!('capacityUnit' in request.resource.data)
+          || request.resource.data.capacityUnit is string)
+        && (!('details' in request.resource.data)
+          || request.resource.data.details is string)
+        && request.resource.data.driverName is string
+        && request.resource.data.driverContactNumber is string
+        && request.resource.data.warehouseId is string
+        && request.resource.data.warehouseCode is string
         && request.resource.data.requestedByUid == request.auth.uid
-        && request.resource.data.status == 'pending';
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && exists(
+          /databases/$(database)/documents/warehouses/$(request.resource.data.warehouseId)
+        )
+        && get(
+          /databases/$(database)/documents/warehouses/$(request.resource.data.warehouseId)
+        ).data.ownerUid == request.auth.uid
+        && get(
+          /databases/$(database)/documents/warehouses/$(request.resource.data.warehouseId)
+        ).data.code == request.resource.data.warehouseCode;
 
       allow read: if signedIn()
         && resource.data.requestedByUid == request.auth.uid;

@@ -23,12 +23,13 @@ class _WarehousePageState extends State<WarehousePage> {
       TextEditingController();
   final TextEditingController _locationController = TextEditingController();
 
-  _WarehouseDetails? _warehouse;
+  final List<WarehouseModel> _savedWarehouses = [];
+  WarehouseModel? _savedWarehouse;
+  WarehouseModel? _editingWarehouse;
   bool _isShowingForm = false;
   bool _isLoading = true;
   bool _isSaving = false;
   String? _errorMessage;
-  WarehouseModel? _savedWarehouse;
   double? _selectedLatitude;
   double? _selectedLongitude;
 
@@ -53,10 +54,10 @@ class _WarehousePageState extends State<WarehousePage> {
       final warehouses = await _firestoreService.getMyWarehouses();
       if (!mounted) return;
       setState(() {
+        _savedWarehouses
+          ..clear()
+          ..addAll(warehouses);
         _savedWarehouse = warehouses.isEmpty ? null : warehouses.first;
-        _warehouse = _savedWarehouse == null
-            ? null
-            : _WarehouseDetails.fromModel(_savedWarehouse!);
         _selectedLatitude = _savedWarehouse?.latitude;
         _selectedLongitude = _savedWarehouse?.longitude;
         _isLoading = false;
@@ -73,6 +74,7 @@ class _WarehousePageState extends State<WarehousePage> {
 
   void _openRegistrationForm() {
     _clearForm();
+    _editingWarehouse = null;
     setState(() => _isShowingForm = true);
   }
 
@@ -90,6 +92,7 @@ class _WarehousePageState extends State<WarehousePage> {
   void _openEditForm() {
     final warehouse = _savedWarehouse;
     if (warehouse == null) return;
+    _editingWarehouse = warehouse;
     _nameController.text = warehouse.name;
     _addressController.text = warehouse.address;
     _contactNameController.text = warehouse.contactName;
@@ -130,7 +133,7 @@ class _WarehousePageState extends State<WarehousePage> {
       _errorMessage = null;
     });
     try {
-      final existing = _savedWarehouse;
+      final existing = _editingWarehouse;
       if (existing == null) {
         final created = await _firestoreService.createWarehouse(
           name: _nameController.text,
@@ -141,8 +144,8 @@ class _WarehousePageState extends State<WarehousePage> {
           latitude: _selectedLatitude,
           longitude: _selectedLongitude,
         );
+        _savedWarehouses.add(created);
         _savedWarehouse = created;
-        _warehouse = _WarehouseDetails.fromModel(created);
       } else {
         await _firestoreService.updateWarehouse(
           warehouse: existing,
@@ -168,13 +171,19 @@ class _WarehousePageState extends State<WarehousePage> {
           createdAt: existing.createdAt,
           updatedAt: DateTime.now(),
         );
+        final index = _savedWarehouses.indexWhere(
+          (warehouse) => warehouse.warehouseId == updated.warehouseId,
+        );
+        if (index >= 0) {
+          _savedWarehouses[index] = updated;
+        }
         _savedWarehouse = updated;
-        _warehouse = _WarehouseDetails.fromModel(updated);
       }
       if (!mounted) return;
       setState(() {
         _isShowingForm = false;
         _isSaving = false;
+        _editingWarehouse = null;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -242,22 +251,32 @@ class _WarehousePageState extends State<WarehousePage> {
   }
 
   Widget _buildDashboard() {
-    final warehouse = _warehouse;
-    if (warehouse == null) {
+    if (_savedWarehouses.isEmpty) {
       return _buildEmptyState();
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _SectionHeading(
+        const _SectionHeading(
           eyebrow: 'WAREHOUSE OVERVIEW',
-          title: warehouse.name,
-          subtitle: 'Your warehouse is ready to manage.',
+          title: 'Your warehouses',
+          subtitle: 'Manage your registered warehouse locations.',
           icon: Icons.warehouse_rounded,
         ),
         const SizedBox(height: 20),
-        _buildWarehouseCard(warehouse),
+        ..._savedWarehouses.map(
+          (warehouse) => Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: _buildWarehouseCard(warehouse),
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: _openRegistrationForm,
+          icon: const Icon(Icons.add_business_outlined),
+          label: const Text('Add another warehouse'),
+          style: _outlinedButtonStyle(),
+        ),
         const SizedBox(height: 28),
         const _SectionHeading(
           eyebrow: 'ASSOCIATED TRUCKS',
@@ -287,12 +306,6 @@ class _WarehousePageState extends State<WarehousePage> {
           color: const Color(0xFFE58B9B),
         ),
         const SizedBox(height: 24),
-        OutlinedButton.icon(
-          onPressed: _openEditForm,
-          icon: const Icon(Icons.edit_outlined),
-          label: const Text('Update warehouse details'),
-          style: _outlinedButtonStyle(),
-        ),
       ],
     );
   }
@@ -430,6 +443,12 @@ class _WarehousePageState extends State<WarehousePage> {
                     '${_selectedLongitude!.toStringAsFixed(6)}',
             style: TextStyle(color: mutedColor, fontSize: 12, height: 1.4),
           ),
+          const SizedBox(height: 8),
+          const Text(
+            'A unique warehouse code will be generated in the WH-12345 '
+            'format.',
+            style: TextStyle(color: mutedColor, fontSize: 12, height: 1.4),
+          ),
           const SizedBox(height: 24),
           SizedBox(
             height: 54,
@@ -452,7 +471,8 @@ class _WarehousePageState extends State<WarehousePage> {
     );
   }
 
-  Widget _buildWarehouseCard(_WarehouseDetails warehouse) {
+  Widget _buildWarehouseCard(WarehouseModel model) {
+    final warehouse = _WarehouseDetails.fromModel(model);
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -501,6 +521,23 @@ class _WarehousePageState extends State<WarehousePage> {
               label: 'Location',
               value: warehouse.location,
             ),
+          Padding(
+            padding: const EdgeInsets.only(top: 4, left: 12, right: 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  _savedWarehouse = model;
+                  _openEditForm();
+                },
+                icon: const Icon(Icons.edit_outlined),
+                label: const Text('Update warehouse details'),
+                style: _outlinedButtonStyle(
+                  padding: const EdgeInsets.symmetric(vertical: 17),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -556,12 +593,17 @@ class _WarehousePageState extends State<WarehousePage> {
     );
   }
 
-  ButtonStyle _outlinedButtonStyle() {
+  ButtonStyle _outlinedButtonStyle({
+    EdgeInsetsGeometry? padding,
+    double borderRadius = 16,
+  }) {
     return OutlinedButton.styleFrom(
       foregroundColor: textColor,
       side: const BorderSide(color: borderColor),
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      padding: padding ?? const EdgeInsets.symmetric(vertical: 14),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(borderRadius),
+      ),
     );
   }
 
@@ -584,8 +626,8 @@ class _WarehousePageState extends State<WarehousePage> {
   String _friendlyError(Object error) {
     if (error is StateError) return error.message.toString();
     if (error is FirebaseException) {
-      return 'Firestore error (${error.code}): '
-          '${error.message ?? 'The request could not be completed.'}';
+      return 'Unable to complete the request (${error.code}). '
+          'Please try again.';
     }
     return 'Could not complete the request. Check your connection and try again.';
   }

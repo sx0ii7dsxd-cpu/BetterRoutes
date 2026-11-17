@@ -53,7 +53,8 @@ Run the app with:
 
 ### Logistics workflows
 
-- Warehouse registration and generated warehouse codes
+- Warehouse registration and unique five-digit warehouse codes (`WH-12345`)
+- Warehouse code reservations are stored atomically with new warehouse records
 - Firestore-backed warehouse persistence with map-selected coordinates
 - Warehouse overview and truck-activity sections
 - Truck and driver registration form
