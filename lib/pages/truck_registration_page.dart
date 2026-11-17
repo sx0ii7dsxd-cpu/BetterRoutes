@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/firestore_service.dart';
 import 'map_page.dart';
 
 class TruckRegistrationPage extends StatefulWidget {
@@ -10,6 +11,7 @@ class TruckRegistrationPage extends StatefulWidget {
 }
 
 class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
+  final FirestoreService _firestoreService = FirestoreService();
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _registrationController = TextEditingController();
   final TextEditingController _capacityController = TextEditingController();
@@ -24,6 +26,7 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
   bool _isCheckingWarehouse = false;
   bool _warehouseCodeValid = false;
   bool _submitted = false;
+  bool _isSubmitting = false;
   String? _warehouseMessage;
 
   @override
@@ -53,18 +56,30 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
       _warehouseMessage = null;
     });
 
-    await Future<void>.delayed(const Duration(milliseconds: 450));
-    if (!mounted) return;
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (!mounted) return;
 
-    final isValid = RegExp(r'^WH-\d{6}$').hasMatch(code);
-    setState(() {
-      _isCheckingWarehouse = false;
-      _warehouseCodeValid = isValid;
-      _warehouseMessage = isValid
-          ? 'Code format accepted. Warehouse name will be resolved from '
-                'Firestore after integration.'
-          : 'Use a warehouse code in the format WH-123456.';
-    });
+      final formatIsValid = RegExp(r'^WH-[A-Z0-9]{6,20}$').hasMatch(code);
+      final warehouse = formatIsValid
+          ? await _firestoreService.findMyWarehouseByCode(code)
+          : null;
+      if (!mounted) return;
+      setState(() {
+        _isCheckingWarehouse = false;
+        _warehouseCodeValid = warehouse != null;
+        _warehouseMessage = warehouse != null
+            ? 'Warehouse verified: ${warehouse.name}.'
+            : 'Enter a warehouse code belonging to your account.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isCheckingWarehouse = false;
+        _warehouseCodeValid = false;
+        _warehouseMessage = _friendlyError(error);
+      });
+    }
   }
 
   Future<void> _submitRegistration() async {
@@ -78,15 +93,43 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
     }
 
     FocusScope.of(context).unfocus();
-    setState(() => _submitted = true);
-    await Future<void>.delayed(const Duration(milliseconds: 650));
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Registration submitted for administrator approval.'),
-      ),
-    );
+    final capacity = _parseCapacity(_capacityController.text);
+    if (capacity == null) {
+      setState(
+        () => _warehouseMessage =
+            'Enter capacity as a number, such as 5 tonnes.',
+      );
+      return;
+    }
+    setState(() => _isSubmitting = true);
+    try {
+      await _firestoreService.submitTruckRegistration(
+        registrationNumber: _registrationController.text,
+        truckType: _truckType!,
+        capacity: capacity.value,
+        capacityUnit: capacity.unit,
+        details: _detailsController.text,
+        driverName: _driverController.text,
+        driverContactNumber: _driverContactController.text,
+        warehouseCode: _warehouseCodeController.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+        _submitted = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Registration submitted for administrator approval.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_friendlyError(error))),
+      );
+    }
   }
 
   @override
@@ -179,7 +222,7 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
             label: 'Vehicle capacity',
             hint: 'e.g. 5 tonnes',
             icon: Icons.scale_outlined,
-            validator: _requiredValidator,
+            validator: _capacityValidator,
           ),
           const SizedBox(height: 15),
           _TruckField(
@@ -277,9 +320,13 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
           SizedBox(
             height: 54,
             child: ElevatedButton.icon(
-              onPressed: _isCheckingWarehouse ? null : _submitRegistration,
+              onPressed: _isCheckingWarehouse || _isSubmitting
+                  ? null
+                  : _submitRegistration,
               icon: const Icon(Icons.send_rounded),
-              label: const Text('Submit Registration'),
+              label: Text(
+                _isSubmitting ? 'Submitting...' : 'Submit Registration',
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: purple,
                 foregroundColor: background,
@@ -341,8 +388,8 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
         ),
         const SizedBox(height: 18),
         const Text(
-          'This status is local to the current session until registration '
-          'data is connected to Firestore.',
+          'Your request is stored in Firestore and remains pending until it '
+          'is reviewed.',
           textAlign: TextAlign.center,
           style: TextStyle(color: mutedColor, fontSize: 12, height: 1.4),
         ),
@@ -411,6 +458,38 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
     }
     return null;
   }
+
+  String? _capacityValidator(String? value) {
+    final requiredError = _requiredValidator(value);
+    if (requiredError != null) return requiredError;
+    if (_parseCapacity(value!) == null) {
+      return 'Enter a numeric capacity, such as 5 tonnes';
+    }
+    return null;
+  }
+
+  _ParsedCapacity? _parseCapacity(String value) {
+    final match = RegExp(
+      r'^\s*(\d+(?:\.\d+)?)\s*(.*)$',
+    ).firstMatch(value.trim());
+    if (match == null) return null;
+    final number = double.tryParse(match.group(1)!);
+    if (number == null || number <= 0) return null;
+    final unit = match.group(2)!.trim();
+    return _ParsedCapacity(number, unit.isEmpty ? null : unit);
+  }
+
+  String _friendlyError(Object error) {
+    if (error is StateError) return error.message.toString();
+    return 'Could not complete the request. Check your connection and try again.';
+  }
+}
+
+class _ParsedCapacity {
+  const _ParsedCapacity(this.value, this.unit);
+
+  final double value;
+  final String? unit;
 }
 
 class _TruckField extends StatelessWidget {

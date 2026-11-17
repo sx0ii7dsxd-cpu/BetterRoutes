@@ -11,8 +11,8 @@ authentication, MapTiler for place search and optional map styling, OSRM for
 driving-route calculation, and OpenStreetMap as a reliable map fallback.
 
 The current version is a functional prototype. Route planning and map
-interaction are connected to external services, while logistics records are
-currently held in local widget state and are not yet persisted to Firestore.
+interaction are connected to external services, warehouse records are persisted
+to Firestore, and truck registrations are stored as pending requests.
 
 ## Features
 
@@ -54,6 +54,7 @@ Run the app with:
 ### Logistics workflows
 
 - Warehouse registration and generated warehouse codes
+- Firestore-backed warehouse persistence with map-selected coordinates
 - Warehouse overview and truck-activity sections
 - Truck and driver registration form
 - Warehouse-code format validation
@@ -174,9 +175,9 @@ during widget tests.
 
 ## Current limitations
 
-- Warehouse and truck data are not persisted.
+- Truck approval and approved-truck persistence are not implemented yet.
 - Shipment tracking is a validated UI flow without a live shipment backend.
-- Warehouse-code validation currently checks format only.
+- Truck warehouse-code validation requires a matching owned Firestore warehouse.
 - Route alternatives are provided by OSRM, not a fleet-optimization engine.
 - Turn-by-turn instructions are not implemented.
 - Live navigation is a progress estimate, not a complete navigation system.
@@ -185,7 +186,7 @@ during widget tests.
 
 ## Roadmap
 
-- Add Firestore models and security rules for warehouses and trucks
+- Add Firestore models and security rules for approved trucks
 - Implement administrator approval for truck registrations
 - Connect shipment lookup to real shipment events and locations
 - Add saved places and recent searches

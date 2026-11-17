@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
 
+import '../models/warehouse_model.dart';
+import '../services/firestore_service.dart';
 import 'map_page.dart';
+import 'warehouse_location_picker_page.dart';
 
 class WarehousePage extends StatefulWidget {
   const WarehousePage({super.key});
@@ -10,6 +14,7 @@ class WarehousePage extends StatefulWidget {
 }
 
 class _WarehousePageState extends State<WarehousePage> {
+  final FirestoreService _firestoreService = FirestoreService();
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
@@ -20,6 +25,18 @@ class _WarehousePageState extends State<WarehousePage> {
 
   _WarehouseDetails? _warehouse;
   bool _isShowingForm = false;
+  bool _isLoading = true;
+  bool _isSaving = false;
+  String? _errorMessage;
+  WarehouseModel? _savedWarehouse;
+  double? _selectedLatitude;
+  double? _selectedLongitude;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWarehouses();
+  }
 
   @override
   void dispose() {
@@ -31,29 +48,150 @@ class _WarehousePageState extends State<WarehousePage> {
     super.dispose();
   }
 
+  Future<void> _loadWarehouses() async {
+    try {
+      final warehouses = await _firestoreService.getMyWarehouses();
+      if (!mounted) return;
+      setState(() {
+        _savedWarehouse = warehouses.isEmpty ? null : warehouses.first;
+        _warehouse = _savedWarehouse == null
+            ? null
+            : _WarehouseDetails.fromModel(_savedWarehouse!);
+        _selectedLatitude = _savedWarehouse?.latitude;
+        _selectedLongitude = _savedWarehouse?.longitude;
+        _isLoading = false;
+        _errorMessage = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = _friendlyError(error);
+      });
+    }
+  }
+
   void _openRegistrationForm() {
+    _clearForm();
     setState(() => _isShowingForm = true);
   }
 
-  void _registerWarehouse() {
+  void _clearForm() {
+    _nameController.clear();
+    _addressController.clear();
+    _contactNameController.clear();
+    _contactNumberController.clear();
+    _locationController.clear();
+    _selectedLatitude = null;
+    _selectedLongitude = null;
+    _formKey.currentState?.reset();
+  }
+
+  void _openEditForm() {
+    final warehouse = _savedWarehouse;
+    if (warehouse == null) return;
+    _nameController.text = warehouse.name;
+    _addressController.text = warehouse.address;
+    _contactNameController.text = warehouse.contactName;
+    _contactNumberController.text = warehouse.contactNumber;
+    _locationController.text = warehouse.location;
+    _selectedLatitude = warehouse.latitude;
+    _selectedLongitude = warehouse.longitude;
+    setState(() => _isShowingForm = true);
+  }
+
+  Future<void> _pickWarehouseLocation() async {
+    final selection =
+        await Navigator.of(context).push<WarehouseLocationSelection>(
+      MaterialPageRoute(
+        builder: (_) => WarehouseLocationPickerPage(
+          initialDisplayName: _locationController.text.trim().isEmpty
+              ? null
+              : _locationController.text.trim(),
+          initialLatitude: _selectedLatitude,
+          initialLongitude: _selectedLongitude,
+        ),
+      ),
+    );
+    if (!mounted || selection == null) return;
+    setState(() {
+      _locationController.text = selection.displayName;
+      _selectedLatitude = selection.latitude;
+      _selectedLongitude = selection.longitude;
+    });
+  }
+
+  Future<void> _registerWarehouse() async {
     if (!_formKey.currentState!.validate()) return;
 
     FocusScope.of(context).unfocus();
     setState(() {
-      _warehouse = _WarehouseDetails(
-        name: _nameController.text.trim(),
-        address: _addressController.text.trim(),
-        contactName: _contactNameController.text.trim(),
-        contactNumber: _contactNumberController.text.trim(),
-        location: _locationController.text.trim(),
-        code: 'WH-${DateTime.now().millisecondsSinceEpoch % 1000000}',
-      );
-      _isShowingForm = false;
+      _isSaving = true;
+      _errorMessage = null;
     });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Warehouse registered successfully.')),
-    );
+    try {
+      final existing = _savedWarehouse;
+      if (existing == null) {
+        final created = await _firestoreService.createWarehouse(
+          name: _nameController.text,
+          address: _addressController.text,
+          contactName: _contactNameController.text,
+          contactNumber: _contactNumberController.text,
+          location: _locationController.text,
+          latitude: _selectedLatitude,
+          longitude: _selectedLongitude,
+        );
+        _savedWarehouse = created;
+        _warehouse = _WarehouseDetails.fromModel(created);
+      } else {
+        await _firestoreService.updateWarehouse(
+          warehouse: existing,
+          name: _nameController.text,
+          address: _addressController.text,
+          contactName: _contactNameController.text,
+          contactNumber: _contactNumberController.text,
+          location: _locationController.text,
+          latitude: _selectedLatitude,
+          longitude: _selectedLongitude,
+        );
+        final updated = WarehouseModel(
+          warehouseId: existing.warehouseId,
+          code: existing.code,
+          name: _nameController.text.trim(),
+          address: _addressController.text.trim(),
+          contactName: _contactNameController.text.trim(),
+          contactNumber: _contactNumberController.text.trim(),
+          location: _locationController.text.trim(),
+          latitude: _selectedLatitude,
+          longitude: _selectedLongitude,
+          ownerUid: existing.ownerUid,
+          createdAt: existing.createdAt,
+          updatedAt: DateTime.now(),
+        );
+        _savedWarehouse = updated;
+        _warehouse = _WarehouseDetails.fromModel(updated);
+      }
+      if (!mounted) return;
+      setState(() {
+        _isShowingForm = false;
+        _isSaving = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            existing == null
+                ? 'Warehouse registered successfully.'
+                : 'Warehouse updated successfully.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _errorMessage = _friendlyError(error);
+      });
+    }
   }
 
   @override
@@ -81,9 +219,21 @@ class _WarehousePageState extends State<WarehousePage> {
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
-              child: _isShowingForm
-                  ? _buildRegistrationForm()
-                  : _buildDashboard(),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_errorMessage != null) ...[
+                    _ErrorBanner(message: _errorMessage!),
+                    const SizedBox(height: 16),
+                  ],
+                  if (_isLoading)
+                    const Center(child: CircularProgressIndicator())
+                  else if (_isShowingForm)
+                    _buildRegistrationForm()
+                  else
+                    _buildDashboard(),
+                ],
+              ),
             ),
           ),
         ),
@@ -138,7 +288,7 @@ class _WarehousePageState extends State<WarehousePage> {
         ),
         const SizedBox(height: 24),
         OutlinedButton.icon(
-          onPressed: () => setState(() => _isShowingForm = true),
+          onPressed: _openEditForm,
           icon: const Icon(Icons.edit_outlined),
           label: const Text('Update warehouse details'),
           style: _outlinedButtonStyle(),
@@ -265,29 +415,36 @@ class _WarehousePageState extends State<WarehousePage> {
           _WarehouseField(
             controller: _locationController,
             label: 'Warehouse location',
-            hint: 'Optional location note or landmark',
+            hint: 'Tap to select on the map',
             icon: Icons.my_location_rounded,
             textInputAction: TextInputAction.done,
+            readOnly: true,
+            onTap: _pickWarehouseLocation,
           ),
           const SizedBox(height: 12),
-          const Text(
-            'Warehouse location can be connected to the map and Firestore '
-            'data model in a later phase.',
+          Text(
+            _selectedLatitude == null || _selectedLongitude == null
+                ? 'Select a point on the map to save its approximate name and '
+                    'coordinates.'
+                : 'Coordinates: ${_selectedLatitude!.toStringAsFixed(6)}, '
+                    '${_selectedLongitude!.toStringAsFixed(6)}',
             style: TextStyle(color: mutedColor, fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 24),
           SizedBox(
             height: 54,
             child: ElevatedButton.icon(
-              onPressed: _registerWarehouse,
+              onPressed: _isSaving ? null : _registerWarehouse,
               icon: const Icon(Icons.check_rounded),
-              label: const Text('Register Warehouse'),
+              label: Text(_isSaving ? 'Saving...' : 'Save Warehouse'),
               style: _primaryButtonStyle(),
             ),
           ),
           const SizedBox(height: 10),
           TextButton(
-            onPressed: () => setState(() => _isShowingForm = false),
+            onPressed: _isSaving
+                ? null
+                : () => setState(() => _isShowingForm = false),
             child: const Text('Cancel'),
           ),
         ],
@@ -423,6 +580,37 @@ class _WarehousePageState extends State<WarehousePage> {
     }
     return null;
   }
+
+  String _friendlyError(Object error) {
+    if (error is StateError) return error.message.toString();
+    if (error is FirebaseException) {
+      return 'Firestore error (${error.code}): '
+          '${error.message ?? 'The request could not be completed.'}';
+    }
+    return 'Could not complete the request. Check your connection and try again.';
+  }
+}
+
+class _ErrorBanner extends StatelessWidget {
+  const _ErrorBanner({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A202C),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE58B9B)),
+      ),
+      child: Text(
+        message,
+        style: const TextStyle(color: Color(0xFFE58B9B), height: 1.35),
+      ),
+    );
+  }
 }
 
 class _WarehouseField extends StatelessWidget {
@@ -435,6 +623,8 @@ class _WarehouseField extends StatelessWidget {
     this.keyboardType,
     this.maxLines = 1,
     this.textInputAction,
+    this.readOnly = false,
+    this.onTap,
   });
 
   final TextEditingController controller;
@@ -445,6 +635,8 @@ class _WarehouseField extends StatelessWidget {
   final TextInputType? keyboardType;
   final int maxLines;
   final TextInputAction? textInputAction;
+  final bool readOnly;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -454,6 +646,8 @@ class _WarehouseField extends StatelessWidget {
       keyboardType: keyboardType,
       textInputAction: textInputAction,
       maxLines: maxLines,
+      readOnly: readOnly,
+      onTap: onTap,
       style: const TextStyle(color: textColor),
       cursorColor: purple,
       decoration: InputDecoration(
@@ -596,6 +790,8 @@ class _WarehouseDetails {
     required this.contactName,
     required this.contactNumber,
     required this.location,
+    required this.latitude,
+    required this.longitude,
     required this.code,
   });
 
@@ -604,5 +800,20 @@ class _WarehouseDetails {
   final String contactName;
   final String contactNumber;
   final String location;
+  final double? latitude;
+  final double? longitude;
   final String code;
+
+  factory _WarehouseDetails.fromModel(WarehouseModel model) {
+    return _WarehouseDetails(
+      name: model.name,
+      address: model.address,
+      contactName: model.contactName,
+      contactNumber: model.contactNumber,
+      location: model.location,
+      latitude: model.latitude,
+      longitude: model.longitude,
+      code: model.code,
+    );
+  }
 }

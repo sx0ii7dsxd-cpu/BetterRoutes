@@ -137,6 +137,73 @@ class PlaceSearchService {
     return results;
   }
 
+  Future<PlaceSearchResult?> reverseGeocode({
+    required double latitude,
+    required double longitude,
+  }) async {
+    if (apiKey.trim().isEmpty || apiKey.trim() == 'YOUR_MAPTILER_API_KEY') {
+      throw const PlaceSearchException(
+        'Location names require a MapTiler API key.',
+      );
+    }
+
+    final Uri uri = Uri.https(
+      'api.maptiler.com',
+      '/geocoding/$longitude,$latitude.json',
+      {
+        'key': apiKey.trim(),
+        'limit': '1',
+        'language': 'en',
+      },
+    );
+    final http.Response response = await _client
+        .get(uri)
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode != 200) {
+      throw PlaceSearchException(
+        'Location name lookup is unavailable (HTTP ${response.statusCode}).',
+      );
+    }
+
+    final Object? decoded = jsonDecode(response.body);
+    if (decoded is! Map || decoded['features'] is! List) {
+      throw const FormatException('Location lookup returned invalid results.');
+    }
+
+    for (final Object? feature in decoded['features'] as List) {
+      if (feature is! Map) continue;
+      final Object? centerValue = feature['center'];
+      final Object? placeNameValue = feature['place_name'];
+      if (centerValue is! List ||
+          centerValue.length < 2 ||
+          placeNameValue is! String) {
+        continue;
+      }
+
+      final double? resultLongitude = _asDouble(centerValue[0]);
+      final double? resultLatitude = _asDouble(centerValue[1]);
+      final String displayName = placeNameValue.trim();
+      if (resultLatitude == null ||
+          resultLongitude == null ||
+          displayName.isEmpty) {
+        continue;
+      }
+
+      final Object? textValue = feature['text'];
+      final String name = textValue is String && textValue.trim().isNotEmpty
+          ? textValue.trim()
+          : displayName.split(',').first.trim();
+      return PlaceSearchResult(
+        name: name,
+        displayName: displayName,
+        address: displayName == name ? null : displayName,
+        latitude: resultLatitude,
+        longitude: resultLongitude,
+      );
+    }
+    return null;
+  }
+
   void dispose() {
     if (_ownsClient) _client.close();
   }
