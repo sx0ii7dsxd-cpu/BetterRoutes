@@ -6,11 +6,9 @@ import '../models/warehouse_model.dart';
 import 'warehouse_code_generator.dart';
 
 class FirestoreService {
-  FirestoreService({
-    FirebaseFirestore? firestore,
-    FirebaseAuth? auth,
-  })  : _firestore = firestore ?? FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+  FirestoreService({FirebaseFirestore? firestore, FirebaseAuth? auth})
+    : _firestore = firestore ?? FirebaseFirestore.instance,
+      _auth = auth ?? FirebaseAuth.instance;
 
   final FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
@@ -192,14 +190,31 @@ class FirestoreService {
     return TruckRegistrationModel.fromFirestore(await document.get());
   }
 
-  Future<List<TruckRegistrationModel>>
-      getMyTruckRegistrationRequests() async {
+  Future<List<TruckRegistrationModel>> getMyTruckRegistrationRequests() async {
     final user = _requireUser();
     final snapshot = await _truckRequests
         .where('requestedByUid', isEqualTo: user.uid)
         .orderBy('createdAt', descending: true)
         .get();
     return snapshot.docs.map(TruckRegistrationModel.fromFirestore).toList();
+  }
+
+  Stream<List<TruckRegistrationModel>> watchMyTruckRegistrationRequests() {
+    final user = _auth.currentUser;
+    if (user == null) {
+      return Stream.error(
+        StateError('You must be signed in to use this feature.'),
+      );
+    }
+
+    return _truckRequests
+        .where('requestedByUid', isEqualTo: user.uid)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map(TruckRegistrationModel.fromFirestore).toList(),
+        );
   }
 }
 

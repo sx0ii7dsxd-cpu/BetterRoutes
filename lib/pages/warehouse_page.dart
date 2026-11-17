@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
+import '../models/truck_registration_model.dart';
 import '../models/warehouse_model.dart';
 import '../services/firestore_service.dart';
 import 'map_page.dart';
@@ -30,6 +33,10 @@ class _WarehousePageState extends State<WarehousePage> {
   bool _isLoading = true;
   bool _isSaving = false;
   String? _errorMessage;
+  StreamSubscription<List<TruckRegistrationModel>>? _truckRequestsSubscription;
+  List<TruckRegistrationModel> _truckRequests = const [];
+  bool _isLoadingTruckRequests = true;
+  String? _truckRequestsError;
   double? _selectedLatitude;
   double? _selectedLongitude;
 
@@ -37,16 +44,40 @@ class _WarehousePageState extends State<WarehousePage> {
   void initState() {
     super.initState();
     _loadWarehouses();
+    _subscribeToTruckRequests();
   }
 
   @override
   void dispose() {
+    _truckRequestsSubscription?.cancel();
     _nameController.dispose();
     _addressController.dispose();
     _contactNameController.dispose();
     _contactNumberController.dispose();
     _locationController.dispose();
     super.dispose();
+  }
+
+  void _subscribeToTruckRequests() {
+    _truckRequestsSubscription = _firestoreService
+        .watchMyTruckRegistrationRequests()
+        .listen(
+          (requests) {
+            if (!mounted) return;
+            setState(() {
+              _truckRequests = requests;
+              _isLoadingTruckRequests = false;
+              _truckRequestsError = null;
+            });
+          },
+          onError: (Object error) {
+            if (!mounted) return;
+            setState(() {
+              _isLoadingTruckRequests = false;
+              _truckRequestsError = _friendlyError(error);
+            });
+          },
+        );
   }
 
   Future<void> _loadWarehouses() async {
@@ -104,18 +135,18 @@ class _WarehousePageState extends State<WarehousePage> {
   }
 
   Future<void> _pickWarehouseLocation() async {
-    final selection =
-        await Navigator.of(context).push<WarehouseLocationSelection>(
-      MaterialPageRoute(
-        builder: (_) => WarehouseLocationPickerPage(
-          initialDisplayName: _locationController.text.trim().isEmpty
-              ? null
-              : _locationController.text.trim(),
-          initialLatitude: _selectedLatitude,
-          initialLongitude: _selectedLongitude,
-        ),
-      ),
-    );
+    final selection = await Navigator.of(context)
+        .push<WarehouseLocationSelection>(
+          MaterialPageRoute(
+            builder: (_) => WarehouseLocationPickerPage(
+              initialDisplayName: _locationController.text.trim().isEmpty
+                  ? null
+                  : _locationController.text.trim(),
+              initialLatitude: _selectedLatitude,
+              initialLongitude: _selectedLongitude,
+            ),
+          ),
+        );
     if (!mounted || selection == null) return;
     setState(() {
       _locationController.text = selection.displayName;
@@ -285,27 +316,75 @@ class _WarehousePageState extends State<WarehousePage> {
           icon: Icons.local_shipping_rounded,
         ),
         const SizedBox(height: 14),
+        if (_isLoadingTruckRequests)
+          const Center(child: CircularProgressIndicator())
+        else if (_truckRequestsError != null)
+          _buildTruckActivityMessage(
+            Icons.error_outline_rounded,
+            _truckRequestsError!,
+            const Color(0xFFE58B9B),
+          )
+        else
+          ..._savedWarehouses.map(
+            (warehouse) => Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: _buildWarehouseTruckActivity(warehouse),
+            ),
+          ),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  Widget _buildWarehouseTruckActivity(WarehouseModel warehouse) {
+    final requests = _truckRequests
+        .where((request) => request.warehouseId == warehouse.warehouseId)
+        .toList();
+    final pending = requests
+        .where((request) => request.status.toLowerCase() == 'pending')
+        .toList();
+    final approved = requests
+        .where((request) => request.status.toLowerCase() == 'approved')
+        .toList();
+    final rejected = requests
+        .where((request) => request.status.toLowerCase() == 'rejected')
+        .toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '${warehouse.name} · ${warehouse.code}',
+          style: const TextStyle(
+            color: textColor,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 10),
         _buildTruckSection(
           title: 'Approved trucks',
-          subtitle: 'No approved trucks yet.',
+          requests: approved,
+          emptyText: 'No approved trucks for this warehouse.',
           icon: Icons.check_circle_outline_rounded,
           color: const Color(0xFF5CC6A3),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         _buildTruckSection(
           title: 'Pending requests',
-          subtitle: 'No pending registration requests.',
+          requests: pending,
+          emptyText: 'No pending requests for this warehouse.',
           icon: Icons.pending_actions_rounded,
           color: purple,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         _buildTruckSection(
           title: 'Rejected requests',
-          subtitle: 'No rejected requests.',
+          requests: rejected,
+          emptyText: 'No rejected requests for this warehouse.',
           icon: Icons.cancel_outlined,
           color: const Color(0xFFE58B9B),
         ),
-        const SizedBox(height: 24),
       ],
     );
   }
@@ -371,9 +450,24 @@ class _WarehousePageState extends State<WarehousePage> {
         const _SectionHeading(
           eyebrow: 'TRUCK ACTIVITY',
           title: 'Associated trucks',
-          subtitle: 'Truck requests will appear here after registration.',
+          subtitle: 'Truck requests linked to your warehouses.',
           icon: Icons.local_shipping_outlined,
         ),
+        const SizedBox(height: 14),
+        if (_isLoadingTruckRequests)
+          const Center(child: CircularProgressIndicator())
+        else if (_truckRequestsError != null)
+          _buildTruckActivityMessage(
+            Icons.error_outline_rounded,
+            _truckRequestsError!,
+            const Color(0xFFE58B9B),
+          )
+        else
+          _buildTruckActivityMessage(
+            Icons.inbox_outlined,
+            'No truck registration requests are linked to your warehouses.',
+            mutedColor,
+          ),
       ],
     );
   }
@@ -438,9 +532,9 @@ class _WarehousePageState extends State<WarehousePage> {
           Text(
             _selectedLatitude == null || _selectedLongitude == null
                 ? 'Select a point on the map to save its approximate name and '
-                    'coordinates.'
+                      'coordinates.'
                 : 'Coordinates: ${_selectedLatitude!.toStringAsFixed(6)}, '
-                    '${_selectedLongitude!.toStringAsFixed(6)}',
+                      '${_selectedLongitude!.toStringAsFixed(6)}',
             style: TextStyle(color: mutedColor, fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 8),
@@ -545,7 +639,8 @@ class _WarehousePageState extends State<WarehousePage> {
 
   Widget _buildTruckSection({
     required String title,
-    required String subtitle,
+    required List<TruckRegistrationModel> requests,
+    required String emptyText,
     required IconData icon,
     required Color color,
   }) {
@@ -556,27 +651,60 @@ class _WarehousePageState extends State<WarehousePage> {
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: borderColor),
       ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: color, size: 25),
+              const SizedBox(width: 12),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (requests.isEmpty)
+            Text(
+              emptyText,
+              style: const TextStyle(color: mutedColor, fontSize: 13),
+            )
+          else
+            ...requests.map(
+              (request) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _WarehouseTruckRequest(request: request),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTruckActivityMessage(
+    IconData icon,
+    String message,
+    Color color,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderColor),
+      ),
       child: Row(
         children: [
-          Icon(icon, color: color, size: 25),
+          Icon(icon, color: color),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: textColor,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: const TextStyle(color: mutedColor, fontSize: 13),
-                ),
-              ],
+            child: Text(
+              message,
+              style: const TextStyle(color: mutedColor, height: 1.35),
             ),
           ),
         ],
@@ -630,6 +758,51 @@ class _WarehousePageState extends State<WarehousePage> {
           'Please try again.';
     }
     return 'Could not complete the request. Check your connection and try again.';
+  }
+}
+
+class _WarehouseTruckRequest extends StatelessWidget {
+  const _WarehouseTruckRequest({required this.request});
+
+  final TruckRegistrationModel request;
+
+  @override
+  Widget build(BuildContext context) {
+    final capacity = [
+      request.capacity.toString(),
+      if (request.capacityUnit != null) request.capacityUnit!,
+    ].join(' ');
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            request.registrationNumber,
+            style: const TextStyle(
+              color: textColor,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            '${request.truckType} · $capacity',
+            style: const TextStyle(color: mutedColor, fontSize: 13),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Driver: ${request.driverName}',
+            style: const TextStyle(color: mutedColor, fontSize: 13),
+          ),
+        ],
+      ),
+    );
   }
 }
 

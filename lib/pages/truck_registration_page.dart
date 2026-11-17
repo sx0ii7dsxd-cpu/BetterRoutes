@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../models/truck_registration_model.dart';
 import '../services/firestore_service.dart';
 import '../services/warehouse_code_generator.dart';
 import 'map_page.dart';
@@ -29,9 +32,21 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
   bool _submitted = false;
   bool _isSubmitting = false;
   String? _warehouseMessage;
+  StreamSubscription<List<TruckRegistrationModel>>? _requestsSubscription;
+  List<TruckRegistrationModel> _requests = const [];
+  TruckRegistrationModel? _submittedRequest;
+  bool _isLoadingRequests = true;
+  String? _requestsError;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribeToRequests();
+  }
 
   @override
   void dispose() {
+    _requestsSubscription?.cancel();
     _registrationController.dispose();
     _capacityController.dispose();
     _detailsController.dispose();
@@ -39,6 +54,45 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
     _driverContactController.dispose();
     _warehouseCodeController.dispose();
     super.dispose();
+  }
+
+  void _subscribeToRequests() {
+    _requestsSubscription = _firestoreService
+        .watchMyTruckRegistrationRequests()
+        .listen(
+          (requests) {
+            if (!mounted) return;
+            final submittedRequest = _submittedRequest;
+            setState(() {
+              _requests = requests;
+              _isLoadingRequests = false;
+              _requestsError = null;
+              if (submittedRequest != null) {
+                _submittedRequest = _findRequest(
+                  requests,
+                  submittedRequest.requestId,
+                );
+              }
+            });
+          },
+          onError: (Object error) {
+            if (!mounted) return;
+            setState(() {
+              _isLoadingRequests = false;
+              _requestsError = _friendlyError(error);
+            });
+          },
+        );
+  }
+
+  TruckRegistrationModel? _findRequest(
+    List<TruckRegistrationModel> requests,
+    String requestId,
+  ) {
+    for (final request in requests) {
+      if (request.requestId == requestId) return request;
+    }
+    return null;
   }
 
   Future<void> _validateWarehouseCode() async {
@@ -70,9 +124,9 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
         _warehouseMessage = warehouse != null
             ? 'Warehouse verified: ${warehouse.name}.'
             : isNewFormat
-                ? 'Enter a warehouse code belonging to your account.'
-                : 'Use WH-12345 for new codes, or enter an existing code '
-                    'belonging to your account.';
+            ? 'Enter a warehouse code belonging to your account.'
+            : 'Use WH-12345 for new codes, or enter an existing code '
+                  'belonging to your account.';
       });
     } catch (error) {
       if (!mounted) return;
@@ -98,14 +152,14 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
     final capacity = _parseCapacity(_capacityController.text);
     if (capacity == null) {
       setState(
-        () => _warehouseMessage =
-            'Enter capacity as a number, such as 5 tonnes.',
+        () =>
+            _warehouseMessage = 'Enter capacity as a number, such as 5 tonnes.',
       );
       return;
     }
     setState(() => _isSubmitting = true);
     try {
-      await _firestoreService.submitTruckRegistration(
+      final request = await _firestoreService.submitTruckRegistration(
         registrationNumber: _registrationController.text,
         truckType: _truckType!,
         capacity: capacity.value,
@@ -119,6 +173,7 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
       setState(() {
         _isSubmitting = false;
         _submitted = true;
+        _submittedRequest = request;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -128,9 +183,8 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _isSubmitting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_friendlyError(error))),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(_friendlyError(error))));
     }
   }
 
@@ -159,7 +213,16 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
-              child: _submitted ? _buildSubmittedView() : _buildForm(),
+              child: _submitted
+                  ? _buildSubmittedView()
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildForm(),
+                        const SizedBox(height: 32),
+                        _buildRequestHistory(),
+                      ],
+                    ),
             ),
           ),
         ),
@@ -345,16 +408,22 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
   }
 
   Widget _buildSubmittedView() {
+    final request = _submittedRequest;
+    if (request == null) return _buildRequestHistory();
+
+    final status = request.status.toLowerCase();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionHeading(
+        _SectionHeading(
           eyebrow: 'REGISTRATION STATUS',
-          title: 'Registration submitted',
-          subtitle: 'Your truck is awaiting administrator review.',
+          title: 'Registration ${_statusLabel(status)}',
+          subtitle: 'Your latest truck registration request.',
           icon: Icons.pending_actions_rounded,
         ),
         const SizedBox(height: 24),
+        _TruckRequestCard(request: request),
+        const SizedBox(height: 18),
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
@@ -372,32 +441,54 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
                 isLast: false,
               ),
               _StatusStep(
-                title: 'Pending approval',
-                subtitle: 'An administrator must review this registration',
-                icon: Icons.pending_actions_rounded,
-                color: purple,
+                title: status == 'rejected' ? 'Rejected' : 'Pending approval',
+                subtitle: status == 'rejected'
+                    ? 'This request was rejected.'
+                    : status == 'approved'
+                    ? 'This request was approved.'
+                    : 'This request is awaiting administrator review.',
+                icon: status == 'rejected'
+                    ? Icons.cancel_rounded
+                    : status == 'approved'
+                    ? Icons.check_circle_rounded
+                    : Icons.pending_actions_rounded,
+                color: status == 'rejected'
+                    ? const Color(0xFFE58B9B)
+                    : status == 'approved'
+                    ? const Color(0xFF5CC6A3)
+                    : purple,
                 isLast: false,
               ),
-              const _StatusStep(
-                title: 'Approved',
-                subtitle: 'Not approved yet',
-                icon: Icons.radio_button_unchecked_rounded,
-                color: mutedColor,
+              _StatusStep(
+                title: 'Status: ${_statusLabel(status)}',
+                subtitle: _statusDescription(status),
+                icon: status == 'approved'
+                    ? Icons.check_circle_rounded
+                    : status == 'rejected'
+                    ? Icons.cancel_rounded
+                    : Icons.radio_button_unchecked_rounded,
+                color: status == 'approved'
+                    ? const Color(0xFF5CC6A3)
+                    : status == 'rejected'
+                    ? const Color(0xFFE58B9B)
+                    : mutedColor,
                 isLast: true,
               ),
             ],
           ),
         ),
         const SizedBox(height: 18),
-        const Text(
-          'Your request has been received and remains pending until it is '
-          'reviewed.',
+        Text(
+          'Current request status: ${_statusLabel(status)}.',
           textAlign: TextAlign.center,
           style: TextStyle(color: mutedColor, fontSize: 12, height: 1.4),
         ),
         const SizedBox(height: 24),
         OutlinedButton.icon(
-          onPressed: () => setState(() => _submitted = false),
+          onPressed: () => setState(() {
+            _submitted = false;
+            _submittedRequest = null;
+          }),
           icon: const Icon(Icons.arrow_back_rounded),
           label: const Text('Back to registration form'),
           style: OutlinedButton.styleFrom(
@@ -411,6 +502,60 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
         ),
       ],
     );
+  }
+
+  Widget _buildRequestHistory() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionHeading(
+          eyebrow: 'REGISTRATION HISTORY',
+          title: 'Your truck requests',
+          subtitle: 'Requests are synchronized with your account.',
+          icon: Icons.history_rounded,
+        ),
+        const SizedBox(height: 16),
+        if (_isLoadingRequests)
+          const Center(child: CircularProgressIndicator())
+        else if (_requestsError != null)
+          _RequestMessage(
+            icon: Icons.error_outline_rounded,
+            message: _requestsError!,
+            color: const Color(0xFFE58B9B),
+          )
+        else if (_requests.isEmpty)
+          const _RequestMessage(
+            icon: Icons.inbox_outlined,
+            message: 'No truck registration requests yet.',
+            color: mutedColor,
+          )
+        else
+          ..._requests.map(
+            (request) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _TruckRequestCard(request: request),
+            ),
+          ),
+      ],
+    );
+  }
+
+  String _statusLabel(String status) {
+    if (status.isEmpty) return 'Unknown';
+    return status[0].toUpperCase() + status.substring(1);
+  }
+
+  String _statusDescription(String status) {
+    switch (status) {
+      case 'approved':
+        return 'This request is approved.';
+      case 'rejected':
+        return 'This request is not approved.';
+      case 'pending':
+        return 'This request is awaiting administrator review.';
+      default:
+        return 'The latest status is stored in your request record.';
+    }
   }
 
   InputDecoration _fieldDecoration({
@@ -471,9 +616,8 @@ class _TruckRegistrationPageState extends State<TruckRegistrationPage> {
   }
 
   _ParsedCapacity? _parseCapacity(String value) {
-    final match = RegExp(
-      r'^\s*(\d+(?:\.\d+)?)\s*(.*)$',
-    ).firstMatch(value.trim());
+    final match = RegExp(r'^\s*(\d+(?:\.\d+)?)\s*(.*)$')
+        .firstMatch(value.trim());
     if (match == null) return null;
     final number = double.tryParse(match.group(1)!);
     if (number == null || number <= 0) return null;
@@ -492,6 +636,157 @@ class _ParsedCapacity {
 
   final double value;
   final String? unit;
+}
+
+class _TruckRequestCard extends StatelessWidget {
+  const _TruckRequestCard({required this.request});
+
+  final TruckRegistrationModel request;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = request.status.toLowerCase();
+    final statusColor = status == 'approved'
+        ? const Color(0xFF5CC6A3)
+        : status == 'rejected'
+        ? const Color(0xFFE58B9B)
+        : purple;
+    final capacity = [
+      request.capacity.toString(),
+      if (request.capacityUnit != null) request.capacityUnit!,
+    ].join(' ');
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.local_shipping_outlined, color: purple),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  request.registrationNumber,
+                  style: const TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                status.isEmpty
+                    ? 'Unknown'
+                    : status[0].toUpperCase() + status.substring(1),
+                style: TextStyle(
+                  color: statusColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const Divider(height: 24, color: borderColor),
+          _RequestDetail(label: 'Truck type', value: request.truckType),
+          _RequestDetail(label: 'Capacity', value: capacity),
+          _RequestDetail(label: 'Driver', value: request.driverName),
+          _RequestDetail(
+            label: 'Driver contact',
+            value: request.driverContactNumber,
+          ),
+          _RequestDetail(label: 'Warehouse code', value: request.warehouseCode),
+          if (request.details != null)
+            _RequestDetail(label: 'Details', value: request.details!),
+          if (request.createdAt != null)
+            _RequestDetail(
+              label: 'Submitted',
+              value: _formatRequestDate(request.createdAt!),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RequestDetail extends StatelessWidget {
+  const _RequestDetail({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(
+              label,
+              style: const TextStyle(color: mutedColor, fontSize: 12),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: textColor, fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RequestMessage extends StatelessWidget {
+  const _RequestMessage({
+    required this.icon,
+    required this.message,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String message;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: mutedColor, height: 1.35),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatRequestDate(DateTime date) {
+  final local = date.toLocal();
+  final month = local.month.toString().padLeft(2, '0');
+  final day = local.day.toString().padLeft(2, '0');
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '${local.year}-$month-$day $hour:$minute';
 }
 
 class _TruckField extends StatelessWidget {
