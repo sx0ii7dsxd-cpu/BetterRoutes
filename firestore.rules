@@ -26,10 +26,14 @@ service cloud.firestore {
         && request.resource.data.ownerUid == resource.data.ownerUid
         && request.resource.data.warehouseId == warehouseId
         && request.resource.data.code == resource.data.code
-        && request.resource.data.createdAt == resource.data.createdAt;
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (
+          (!('deletionPending' in resource.data)
+            && !('deletionPending' in request.resource.data))
+          || request.resource.data.deletionPending == resource.data.deletionPending
+        );
 
-      allow delete: if signedIn()
-        && resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
     }
 
     match /warehouseCodeReservations/{code} {
@@ -132,10 +136,54 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read, write: if false;
+
+      match /savedPlaces/{placeId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.name is string
+          && request.resource.data.displayName is string
+          && request.resource.data.latitude is number
+          && request.resource.data.longitude is number
+          && request.resource.data.latitude >= -90
+          && request.resource.data.latitude <= 90
+          && request.resource.data.longitude >= -180
+          && request.resource.data.longitude <= 180;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+
+      match /recentSearches/{searchId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.name is string
+          && request.resource.data.displayName is string
+          && request.resource.data.latitude is number
+          && request.resource.data.longitude is number
+          && request.resource.data.latitude >= -90
+          && request.resource.data.latitude <= 90
+          && request.resource.data.longitude >= -180
+          && request.resource.data.longitude <= 180;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
     }
 
     match /shipments/{shipmentId} {
-      allow read, write: if false;
+      allow read: if signedIn()
+        && resource.data.authorizedUserUids is list
+        && request.auth.uid in resource.data.authorizedUserUids;
+      allow write: if false;
+    }
+
+    match /shipments/{shipmentId}/events/{eventId} {
+      allow read: if signedIn()
+        && get(
+          /databases/$(database)/documents/shipments/$(shipmentId)
+        ).data.authorizedUserUids is list
+        && request.auth.uid in get(
+          /databases/$(database)/documents/shipments/$(shipmentId)
+        ).data.authorizedUserUids;
+      allow write: if false;
     }
 
     match /emailChangeChallenges/{documentId} {

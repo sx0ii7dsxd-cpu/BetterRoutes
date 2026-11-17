@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../main.dart';
 import 'email_change_page.dart';
+import 'phase2_identity_page.dart';
 
 class ProfileMenu extends StatelessWidget {
   const ProfileMenu({super.key});
@@ -97,6 +98,24 @@ class _ProfileContent extends StatefulWidget {
 
 class _ProfileContentState extends State<_ProfileContent> {
   String? _updatedEmail;
+  bool _isAdmin = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAdminClaim();
+  }
+
+  Future<void> _loadAdminClaim() async {
+    try {
+      final result = await widget.user.getIdTokenResult(true);
+      if (mounted) {
+        setState(() => _isAdmin = result.claims?['admin'] == true);
+      }
+    } on FirebaseAuthException {
+      if (mounted) setState(() => _isAdmin = false);
+    }
+  }
 
   Future<void> _changeEmail() async {
     final String? currentEmail = _updatedEmail ?? widget.user.email;
@@ -240,6 +259,47 @@ class _ProfileContentState extends State<_ProfileContent> {
                 ),
               ),
               const SizedBox(height: 24),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const IdentityManagementPage(),
+                  ),
+                ),
+                icon: const Icon(Icons.badge_outlined, size: 19),
+                label: const Text('Identity management'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: ProfileMenu._purple,
+                  side: const BorderSide(color: ProfileMenu._border),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+              ),
+              if (_isAdmin) ...[
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const AdminConsolePage(),
+                    ),
+                  ),
+                  icon: const Icon(
+                    Icons.admin_panel_settings_outlined,
+                    size: 19,
+                  ),
+                  label: const Text('Administrator console'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: ProfileMenu._purple,
+                    side: const BorderSide(color: ProfileMenu._border),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: () => ProfileMenu._signOut(context),
                 icon: const Icon(Icons.logout_rounded, size: 19),

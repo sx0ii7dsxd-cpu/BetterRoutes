@@ -177,7 +177,9 @@ during widget tests.
 ## Current limitations
 
 - Truck approval and approved-truck persistence are not implemented yet.
-- Shipment tracking is a validated UI flow without a live shipment backend.
+- Shipment tracking reads authorized shipment records and events from
+  Firestore; shipment creation, live GPS updates, and ETA updates still require
+  a trusted backend source.
 - Truck warehouse-code validation requires a matching owned Firestore warehouse.
 - Route alternatives are provided by OSRM, not a fleet-optimization engine.
 - Turn-by-turn instructions are not implemented.
@@ -189,7 +191,7 @@ during widget tests.
 
 - Add Firestore models and security rules for approved trucks
 - Implement administrator approval for truck registrations
-- Connect shipment lookup to real shipment events and locations
+- Add trusted shipment creation and live location/ETA update workflows
 - Add saved places and recent searches
 - Add turn-by-turn route instructions
 - Add delivery orders, vehicle capacity, and route optimization
@@ -266,3 +268,49 @@ To deploy without Firebase Cloud Functions or requiring Firebase Blaze:
 
 Vercel Hobby has plan-specific usage limits and is intended for non-commercial
 projects; review Vercel's current terms and limits before deploying.
+
+## Phase 2 identity and approved trucks
+
+Phase 2 keeps `truckRegistrationRequests` as user-submitted history. An
+administrator review creates a separate trusted `trucks/{truckId}` record.
+Approval does not infer truck ownership from `requestedByUid`; ownership,
+driver assignments, and shipment participants are established by authenticated
+backend workflows.
+
+The trusted Vercel routes are:
+
+- `POST /api/admin`: bootstrap/revoke custom admin claims and perform
+  administrator-only truck decisions.
+- `POST /api/reads`: return role-scoped truck, request, ownership, and
+  invitation records.
+- `POST /api/associations`: submit ownership association requests.
+- `POST /api/invitations`: create or accept one-time driver, customer, and
+  receiver invitations.
+- `POST /api/shipment-authorization`: recompute one shipment or a bounded
+  batch of shipment authorization lists.
+- `POST /api/warehouses`: securely delete an owned warehouse after
+  synchronizing all affected shipment authorization lists. Warehouse documents
+  and code reservations cannot be deleted directly by clients.
+
+The backend requires these additional server-side environment variables:
+
+- `BETTERROUTES_BOOTSTRAP_UID`: the only UID allowed to bootstrap or revoke an
+  administrator claim.
+- `INVITATION_TOKEN_SECRET`: a dedicated secret used to hash invitation tokens.
+  `OTP_HMAC_SECRET` is retained only as a backwards-compatible fallback.
+
+Administrator claims are assigned only by Firebase Admin SDK. After a claim
+change, the affected user's refresh tokens are revoked; the user must sign in
+again or refresh their token before the new claim is visible.
+
+Flutter builds that use the identity screens should define
+`TRUSTED_API_BASE_URL` as the Vercel deployment base URL. The service sends
+Firebase ID tokens over HTTPS and never stores invitation token hashes or
+service credentials in the client.
+
+New backend-owned records include `trucks`, `truckOwnershipRequests`,
+`invitations`, and `warehouseAssociations`. Client writes to these records,
+shipment authorization lists, shipment events, administrator data, and
+warehouse deletion remain denied by Firestore rules. Deploy rules and indexes
+only after emulator and backend tests pass; no Phase 2 deployment is performed
+automatically.

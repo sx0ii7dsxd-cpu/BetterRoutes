@@ -11,6 +11,7 @@ import 'package:latlong2/latlong.dart' as latlong;
 import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
 import 'package:share_plus/share_plus.dart';
 
+import '../models/shipment_model.dart';
 import '../models/warehouse_model.dart';
 import '../services/firestore_service.dart';
 import 'place_search_service.dart';
@@ -22,6 +23,8 @@ import 'route_calculation_service.dart';
 import 'route_navigation_progress.dart';
 import 'route_planning_page.dart';
 import 'route_preview_panel.dart';
+import 'saved_places_page.dart';
+import 'recent_searches_page.dart';
 
 const Color background = Color(0xFF17131F);
 const Color purple = Color(0xFFB39DDB);
@@ -31,7 +34,9 @@ const Color surface = Color(0xFF211C2B);
 const Color borderColor = Color(0xFF383044);
 
 class MapPage extends StatefulWidget {
-  const MapPage({super.key});
+  const MapPage({super.key, this.shipment});
+
+  final ShipmentModel? shipment;
 
   @override
   State<MapPage> createState() => _MapPageState();
@@ -410,6 +415,19 @@ class _MapPageState extends State<MapPage> {
         _searchedName = name;
         _searchedAddress = address;
       });
+      unawaited(
+        _firestoreService.addRecentSearch(
+          PlaceSearchResult(
+            name: name,
+            displayName: displayAddress?.trim().isNotEmpty == true
+                ? displayAddress!.trim()
+                : name,
+            address: address,
+            latitude: latitude,
+            longitude: longitude,
+          ),
+        ),
+      );
       if (_isMapLibreActive) {
         await _moveMapLibreCamera(place, 15);
         await _refreshMapAnnotations();
@@ -455,6 +473,20 @@ class _MapPageState extends State<MapPage> {
         name: name,
         address: _searchedAddress,
         location: location,
+        onSave: () async {
+          await _firestoreService.savePlace(
+            PlaceSearchResult(
+              name: name,
+              displayName: _searchedAddress == null
+                  ? name
+                  : '$name, ${_searchedAddress!}',
+              address: _searchedAddress,
+              latitude: location.latitude,
+              longitude: location.longitude,
+            ),
+          );
+          if (mounted) _showMessage('Place saved.');
+        },
       ),
     );
   }
@@ -903,8 +935,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _onMapLibreCameraMove(maplibre.CameraPosition cameraPosition) {
-    final bool wasShowingNames =
-        _mapLibreZoom >= _warehouseNameZoomThreshold;
+    final bool wasShowingNames = _mapLibreZoom >= _warehouseNameZoomThreshold;
     final bool willShowNames =
         cameraPosition.zoom >= _warehouseNameZoomThreshold;
     _mapLibreZoom = cameraPosition.zoom;
@@ -972,6 +1003,11 @@ class _MapPageState extends State<MapPage> {
       final maplibre.LatLng? searchedLocation = _searchedLocation;
       if (searchedLocation != null) {
         unawaited(_moveMapLibreCamera(searchedLocation, 15));
+      } else {
+        final maplibre.LatLng? shipmentLocation = _shipmentFocusPoint();
+        if (shipmentLocation != null) {
+          unawaited(_moveMapLibreCamera(shipmentLocation, 13));
+        }
       }
     }
   }
@@ -1077,6 +1113,51 @@ class _MapPageState extends State<MapPage> {
             ),
           );
         }
+        final shipment = widget.shipment;
+        if (shipment != null) {
+          final origin = shipment.origin;
+          if (origin?.hasCoordinates == true) {
+            circles.add(
+              maplibre.CircleOptions(
+                geometry: maplibre.LatLng(origin!.latitude!, origin.longitude!),
+                circleRadius: 9,
+                circleColor: '#5CC6A3',
+                circleStrokeWidth: 3,
+                circleStrokeColor: '#FFFFFF',
+              ),
+            );
+          }
+          final destination = shipment.destination;
+          if (destination?.hasCoordinates == true) {
+            circles.add(
+              maplibre.CircleOptions(
+                geometry: maplibre.LatLng(
+                  destination!.latitude!,
+                  destination.longitude!,
+                ),
+                circleRadius: 9,
+                circleColor: '#E58B9B',
+                circleStrokeWidth: 3,
+                circleStrokeColor: '#FFFFFF',
+              ),
+            );
+          }
+          final currentLocation = shipment.currentLocation;
+          if (currentLocation != null) {
+            circles.add(
+              maplibre.CircleOptions(
+                geometry: maplibre.LatLng(
+                  currentLocation.latitude,
+                  currentLocation.longitude,
+                ),
+                circleRadius: 8,
+                circleColor: '#F2C14E',
+                circleStrokeWidth: 3,
+                circleStrokeColor: '#FFFFFF',
+              ),
+            );
+          }
+        }
         circles.add(
           maplibre.CircleOptions(
             geometry: maplibre.LatLng(
@@ -1090,6 +1171,7 @@ class _MapPageState extends State<MapPage> {
           ),
         );
       }
+
       if (circles.isNotEmpty) {
         await controller.addCircles(circles);
       }
@@ -1130,6 +1212,26 @@ class _MapPageState extends State<MapPage> {
         'The custom map could not update its markers. Showing the standard map.',
       );
     }
+  }
+
+  maplibre.LatLng? _shipmentFocusPoint() {
+    final shipment = widget.shipment;
+    final currentLocation = shipment?.currentLocation;
+    if (currentLocation != null) {
+      return maplibre.LatLng(
+        currentLocation.latitude,
+        currentLocation.longitude,
+      );
+    }
+    final origin = shipment?.origin;
+    if (origin?.hasCoordinates == true) {
+      return maplibre.LatLng(origin!.latitude!, origin.longitude!);
+    }
+    final destination = shipment?.destination;
+    if (destination?.hasCoordinates == true) {
+      return maplibre.LatLng(destination!.latitude!, destination.longitude!);
+    }
+    return null;
   }
 
   void _openMenu() {
@@ -1385,7 +1487,8 @@ class _MapPageState extends State<MapPage> {
             }
             return _ProjectPanel(
               scrollController: scrollController,
-              onAction: _showMessage,
+              onSavedPlaces: _openSavedPlaces,
+              onRecentSearches: _openRecentSearches,
               onPlanRoute: () => unawaited(_openRoutePlanner()),
               onTrackDelivery: () {
                 Navigator.of(context).push(
@@ -1429,22 +1532,59 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  Future<void> _openSavedPlaces() async {
+    final place = await Navigator.of(context).push<PlaceSearchResult>(
+      MaterialPageRoute(builder: (_) => const SavedPlacesPage()),
+    );
+    if (place != null) _showStoredPlace(place);
+  }
+
+  Future<void> _openRecentSearches() async {
+    final place = await Navigator.of(context).push<PlaceSearchResult>(
+      MaterialPageRoute(builder: (_) => const RecentSearchesPage()),
+    );
+    if (place != null) _showStoredPlace(place);
+  }
+
+  void _showStoredPlace(PlaceSearchResult place) {
+    final location = maplibre.LatLng(place.latitude, place.longitude);
+    setState(() {
+      _searchedLocation = location;
+      _searchedName = place.name;
+      _searchedAddress = place.address;
+      _searchController.text = place.displayName;
+    });
+    if (_isMapLibreActive) {
+      unawaited(_moveMapLibreCamera(location, 15));
+      unawaited(_refreshMapAnnotations());
+    } else {
+      _legacyMapController.move(
+        latlong.LatLng(place.latitude, place.longitude),
+        15,
+      );
+    }
+  }
+
   Widget _buildLegacyMap(Position position) {
+    final shipmentFocus = _shipmentFocusPoint();
     final latlong.LatLng here = latlong.LatLng(
       position.latitude,
       position.longitude,
+    );
+    final latlong.LatLng initialCenter = latlong.LatLng(
+      shipmentFocus?.latitude ?? position.latitude,
+      shipmentFocus?.longitude ?? position.longitude,
     );
 
     return legacy.FlutterMap(
       mapController: _legacyMapController,
       options: legacy.MapOptions(
-        initialCenter: here,
+        initialCenter: initialCenter,
         initialZoom: _legacyZoom,
         onPositionChanged: (camera, hasGesture) {
           final bool wasShowingNames =
               _legacyZoom >= _warehouseNameZoomThreshold;
-          final bool willShowNames =
-              camera.zoom >= _warehouseNameZoomThreshold;
+          final bool willShowNames = camera.zoom >= _warehouseNameZoomThreshold;
           _legacyZoom = camera.zoom;
           if (wasShowingNames != willShowNames && mounted) {
             setState(() {});
@@ -1514,6 +1654,7 @@ class _MapPageState extends State<MapPage> {
                 child: const Icon(Icons.location_pin, color: purple, size: 42),
               ),
             ],
+            ..._legacyShipmentMarkers(),
             for (final warehouse in _warehouses)
               if (warehouse.latitude != null &&
                   warehouse.longitude != null &&
@@ -1565,6 +1706,61 @@ class _MapPageState extends State<MapPage> {
         ),
       ],
     );
+  }
+
+  List<legacy.Marker> _legacyShipmentMarkers() {
+    final shipment = widget.shipment;
+    if (shipment == null) return const [];
+    final markers = <legacy.Marker>[];
+    final origin = shipment.origin;
+    if (origin?.hasCoordinates == true) {
+      markers.add(
+        legacy.Marker(
+          point: latlong.LatLng(origin!.latitude!, origin.longitude!),
+          width: 40,
+          height: 40,
+          child: const Icon(
+            Icons.trip_origin_rounded,
+            color: Color(0xFF5CC6A3),
+            size: 28,
+          ),
+        ),
+      );
+    }
+    final destination = shipment.destination;
+    if (destination?.hasCoordinates == true) {
+      markers.add(
+        legacy.Marker(
+          point: latlong.LatLng(destination!.latitude!, destination.longitude!),
+          width: 44,
+          height: 48,
+          child: const Icon(
+            Icons.location_pin,
+            color: Color(0xFFE58B9B),
+            size: 42,
+          ),
+        ),
+      );
+    }
+    final currentLocation = shipment.currentLocation;
+    if (currentLocation != null) {
+      markers.add(
+        legacy.Marker(
+          point: latlong.LatLng(
+            currentLocation.latitude,
+            currentLocation.longitude,
+          ),
+          width: 42,
+          height: 42,
+          child: const Icon(
+            Icons.local_shipping_rounded,
+            color: Color(0xFFF2C14E),
+            size: 30,
+          ),
+        ),
+      );
+    }
+    return markers;
   }
 }
 
@@ -1747,9 +1943,7 @@ class _WarehouseMarker extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: isDarkMode
-                    ? textColor
-                    : const Color(0xFF684E75),
+                color: isDarkMode ? textColor : const Color(0xFF684E75),
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
               ),
@@ -2107,11 +2301,13 @@ class _PlaceDetailsSheet extends StatelessWidget {
     required this.name,
     required this.address,
     required this.location,
+    required this.onSave,
   });
 
   final String name;
   final String? address;
   final maplibre.LatLng location;
+  final Future<void> Function() onSave;
 
   @override
   Widget build(BuildContext context) {
@@ -2154,6 +2350,24 @@ class _PlaceDetailsSheet extends StatelessWidget {
               _PlaceDetailRow(
                 icon: Icons.location_on_outlined,
                 value: address!,
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: () async {
+                  try {
+                    await onSave();
+                  } catch (_) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Could not save this place.'),
+                        ),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.bookmark_border_rounded),
+                label: const Text('Save place'),
               ),
             ],
             const SizedBox(height: 13),
@@ -2262,13 +2476,15 @@ class _PlaceDetailRow extends StatelessWidget {
 class _ProjectPanel extends StatelessWidget {
   const _ProjectPanel({
     required this.scrollController,
-    required this.onAction,
+    required this.onSavedPlaces,
+    required this.onRecentSearches,
     required this.onPlanRoute,
     required this.onTrackDelivery,
   });
 
   final ScrollController scrollController;
-  final ValueChanged<String> onAction;
+  final VoidCallback onSavedPlaces;
+  final VoidCallback onRecentSearches;
   final VoidCallback onPlanRoute;
   final VoidCallback onTrackDelivery;
 
@@ -2354,7 +2570,7 @@ class _ProjectPanel extends StatelessWidget {
                     icon: Icons.bookmark_border_rounded,
                     title: 'Saved places',
                     subtitle: 'Keep favourite destinations',
-                    onTap: () => onAction('Saved places are coming soon.'),
+                    onTap: onSavedPlaces,
                   ),
                   _ProjectActionCard(
                     icon: Icons.local_shipping_outlined,
@@ -2366,7 +2582,7 @@ class _ProjectPanel extends StatelessWidget {
                     icon: Icons.history_rounded,
                     title: 'Recent searches',
                     subtitle: 'Return to a previous place',
-                    onTap: () => onAction('Recent searches are coming soon.'),
+                    onTap: onRecentSearches,
                   ),
                 ]),
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(

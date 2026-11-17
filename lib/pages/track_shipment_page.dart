@@ -1,5 +1,10 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../models/shipment_model.dart';
+import '../services/firestore_service.dart';
 import 'map_page.dart';
 
 class TrackShipmentPage extends StatefulWidget {
@@ -10,49 +15,137 @@ class TrackShipmentPage extends StatefulWidget {
 }
 
 class _TrackShipmentPageState extends State<TrackShipmentPage> {
+  final FirestoreService _firestoreService = FirestoreService();
   final TextEditingController _shipmentController = TextEditingController();
+  StreamSubscription<ShipmentModel?>? _shipmentSubscription;
+  StreamSubscription<List<ShipmentEventModel>>? _eventsSubscription;
+  ShipmentModel? _shipment;
+  List<ShipmentEventModel> _events = const [];
   String? _errorMessage;
-  String? _searchedShipmentId;
   bool _isSearching = false;
+  bool _hasSearched = false;
+  bool _isLoadingEvents = false;
 
   @override
   void dispose() {
+    unawaited(_shipmentSubscription?.cancel());
+    unawaited(_eventsSubscription?.cancel());
     _shipmentController.dispose();
     super.dispose();
   }
 
   Future<void> _trackShipment() async {
-    final shipmentId = _shipmentController.text.trim().toUpperCase();
-    setState(() {
-      _errorMessage = null;
-      _searchedShipmentId = null;
-    });
-
-    if (shipmentId.isEmpty) {
-      setState(() => _errorMessage = 'Enter a shipment ID to continue.');
+    final trackingCode = _shipmentController.text.trim().toUpperCase();
+    if (trackingCode.isEmpty) {
+      setState(() {
+        _errorMessage = 'Enter a shipment ID to continue.';
+        _hasSearched = false;
+      });
       return;
     }
 
-    if (!RegExp(r'^SHP-[A-Z0-9]{6,12}$').hasMatch(shipmentId)) {
+    if (!RegExp(r'^SHP-[A-Z0-9]{6,12}$').hasMatch(trackingCode)) {
       setState(() {
         _errorMessage = 'Use a shipment ID in the format SHP-ABC123.';
+        _hasSearched = false;
       });
       return;
     }
 
     FocusScope.of(context).unfocus();
-    setState(() => _isSearching = true);
-    await Future<void>.delayed(const Duration(milliseconds: 500));
+    await _cancelShipmentSubscriptions();
     if (!mounted) return;
-
     setState(() {
-      _isSearching = false;
-      _searchedShipmentId = shipmentId;
+      _isSearching = true;
+      _hasSearched = true;
+      _shipment = null;
+      _events = const [];
+      _errorMessage = null;
     });
+
+    try {
+      final shipment = await _firestoreService.findShipmentByTrackingCode(
+        trackingCode,
+      );
+      if (!mounted) return;
+      if (shipment == null) {
+        setState(() => _isSearching = false);
+        return;
+      }
+
+      setState(() {
+        _shipment = shipment;
+        _isSearching = false;
+        _isLoadingEvents = true;
+      });
+      _subscribeToShipment(shipment.shipmentId);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isSearching = false;
+        _errorMessage = _friendlyError(error);
+      });
+    }
+  }
+
+  void _subscribeToShipment(String shipmentId) {
+    _shipmentSubscription = _firestoreService
+        .watchShipment(shipmentId)
+        .listen(
+          (shipment) {
+            if (!mounted) return;
+            if (shipment == null) {
+              setState(() {
+                _shipment = null;
+                _errorMessage = 'This shipment is no longer available.';
+              });
+              return;
+            }
+            setState(() => _shipment = shipment);
+          },
+          onError: (Object error) {
+            if (!mounted) return;
+            setState(() => _errorMessage = _friendlyError(error));
+          },
+        );
+    _eventsSubscription = _firestoreService
+        .watchShipmentEvents(shipmentId)
+        .listen(
+          (events) {
+            if (!mounted) return;
+            setState(() {
+              _events = events;
+              _isLoadingEvents = false;
+            });
+          },
+          onError: (Object error) {
+            if (!mounted) return;
+            setState(() {
+              _isLoadingEvents = false;
+              _errorMessage = _friendlyError(error);
+            });
+          },
+        );
+  }
+
+  Future<void> _cancelShipmentSubscriptions() async {
+    await _shipmentSubscription?.cancel();
+    await _eventsSubscription?.cancel();
+    _shipmentSubscription = null;
+    _eventsSubscription = null;
+  }
+
+  String _friendlyError(Object error) {
+    if (error is StateError) return error.message.toString();
+    if (error is FirebaseException && error.code == 'permission-denied') {
+      return 'You are not authorized to view this shipment.';
+    }
+    return 'Could not load this shipment. Check your connection and try again.';
   }
 
   @override
   Widget build(BuildContext context) {
+    final shipment = _shipment;
     return Scaffold(
       backgroundColor: background,
       appBar: AppBar(
@@ -86,43 +179,7 @@ class _TrackShipmentPageState extends State<TrackShipmentPage> {
                     icon: Icons.inventory_2_rounded,
                   ),
                   const SizedBox(height: 24),
-                  TextField(
-                    controller: _shipmentController,
-                    textCapitalization: TextCapitalization.characters,
-                    onChanged: (_) {
-                      if (_errorMessage != null) {
-                        setState(() => _errorMessage = null);
-                      }
-                    },
-                    style: const TextStyle(color: textColor),
-                    cursorColor: purple,
-                    decoration: InputDecoration(
-                      labelText: 'Shipment ID',
-                      hintText: 'e.g. SHP-ABC123',
-                      labelStyle: const TextStyle(color: mutedColor),
-                      hintStyle: const TextStyle(
-                        color: mutedColor,
-                        fontSize: 13,
-                      ),
-                      prefixIcon: const Icon(
-                        Icons.receipt_long_outlined,
-                        color: purple,
-                      ),
-                      filled: true,
-                      fillColor: surface,
-                      errorText: _errorMessage,
-                      errorStyle: const TextStyle(
-                        color: Color(0xFFE58B9B),
-                      ),
-                      border: _inputBorder(),
-                      enabledBorder: _inputBorder(),
-                      focusedBorder: _inputBorder(color: purple),
-                      errorBorder: _inputBorder(
-                        color: const Color(0xFFE58B9B),
-                      ),
-                    ),
-                    onSubmitted: (_) => _trackShipment(),
-                  ),
+                  _buildLookupField(),
                   const SizedBox(height: 16),
                   SizedBox(
                     height: 54,
@@ -139,7 +196,9 @@ class _TrackShipmentPageState extends State<TrackShipmentPage> {
                             )
                           : const Icon(Icons.search_rounded),
                       label: Text(
-                        _isSearching ? 'Looking up shipment...' : 'Track Shipment',
+                        _isSearching
+                            ? 'Looking up shipment...'
+                            : 'Track Shipment',
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: purple,
@@ -152,18 +211,219 @@ class _TrackShipmentPageState extends State<TrackShipmentPage> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  if (_searchedShipmentId != null)
-                    _UnavailableShipmentCard(
-                      shipmentId: _searchedShipmentId!,
+                  if (_errorMessage != null)
+                    _MessageCard(
+                      icon: Icons.error_outline_rounded,
+                      message: _errorMessage!,
+                      color: const Color(0xFFE58B9B),
+                      actionLabel: 'Retry',
+                      onAction: _trackShipment,
+                    )
+                  else if (_isSearching)
+                    const Center(
+                      child: CircularProgressIndicator(color: purple),
+                    )
+                  else if (!_hasSearched)
+                    const _EmptyTrackingState()
+                  else if (shipment == null)
+                    const _MessageCard(
+                      icon: Icons.search_off_rounded,
+                      message: 'No accessible shipment was found for that ID.',
+                      color: mutedColor,
                     )
                   else
-                    const _EmptyTrackingState(),
+                    _buildShipmentDetails(shipment),
                 ],
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildLookupField() {
+    return TextField(
+      controller: _shipmentController,
+      textCapitalization: TextCapitalization.characters,
+      onChanged: (_) {
+        if (_errorMessage != null) {
+          setState(() => _errorMessage = null);
+        }
+      },
+      style: const TextStyle(color: textColor),
+      cursorColor: purple,
+      decoration: InputDecoration(
+        labelText: 'Shipment ID',
+        hintText: 'e.g. SHP-ABC123',
+        labelStyle: const TextStyle(color: mutedColor),
+        hintStyle: const TextStyle(color: mutedColor, fontSize: 13),
+        prefixIcon: const Icon(Icons.receipt_long_outlined, color: purple),
+        filled: true,
+        fillColor: surface,
+        border: _inputBorder(),
+        enabledBorder: _inputBorder(),
+        focusedBorder: _inputBorder(color: purple),
+      ),
+      onSubmitted: (_) => _trackShipment(),
+    );
+  }
+
+  Widget _buildShipmentDetails(ShipmentModel shipment) {
+    final status = shipment.status.toLowerCase();
+    final hasMapCoordinates =
+        shipment.origin?.hasCoordinates == true ||
+        shipment.destination?.hasCoordinates == true ||
+        shipment.currentLocation != null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ShipmentSummaryCard(shipment: shipment, status: status),
+        const SizedBox(height: 14),
+        _buildPlaceCard(
+          title: 'Origin',
+          icon: Icons.trip_origin_rounded,
+          place: shipment.origin,
+        ),
+        const SizedBox(height: 12),
+        _buildPlaceCard(
+          title: 'Destination',
+          icon: Icons.location_on_outlined,
+          place: shipment.destination,
+        ),
+        const SizedBox(height: 12),
+        _buildAssociationCard(shipment),
+        const SizedBox(height: 12),
+        if (hasMapCoordinates)
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => MapPage(shipment: shipment),
+              ),
+            ),
+            icon: const Icon(Icons.map_outlined),
+            label: const Text('View shipment locations on map'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: textColor,
+              side: const BorderSide(color: borderColor),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          )
+        else
+          const _MessageCard(
+            icon: Icons.location_off_outlined,
+            message:
+                'Map tracking is unavailable because no coordinates '
+                'are stored for this shipment.',
+            color: mutedColor,
+          ),
+        const SizedBox(height: 20),
+        _buildTimeline(),
+      ],
+    );
+  }
+
+  Widget _buildPlaceCard({
+    required String title,
+    required IconData icon,
+    required ShipmentPlace? place,
+  }) {
+    return _InfoCard(
+      title: title,
+      icon: icon,
+      child: place == null
+          ? const Text('Unavailable', style: TextStyle(color: mutedColor))
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  place.name ?? 'Unnamed location',
+                  style: const TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (place.address != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    place.address!,
+                    style: const TextStyle(color: mutedColor, height: 1.35),
+                  ),
+                ],
+                if (!place.hasCoordinates) ...[
+                  const SizedBox(height: 5),
+                  const Text(
+                    'Coordinates unavailable',
+                    style: TextStyle(color: mutedColor, fontSize: 12),
+                  ),
+                ],
+              ],
+            ),
+    );
+  }
+
+  Widget _buildAssociationCard(ShipmentModel shipment) {
+    return _InfoCard(
+      title: 'Shipment details',
+      icon: Icons.local_shipping_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _DetailRow(
+            label: 'Warehouse',
+            value: shipment.warehouseCode ?? 'Unavailable',
+          ),
+          _DetailRow(label: 'Truck', value: shipment.truckId ?? 'Unavailable'),
+          _DetailRow(
+            label: 'Driver',
+            value: shipment.driverName ?? 'Unavailable',
+          ),
+          _DetailRow(
+            label: 'Driver contact',
+            value: shipment.driverContact ?? 'Unavailable',
+          ),
+          _DetailRow(
+            label: 'Estimated delivery',
+            value: shipment.estimatedDelivery == null
+                ? 'Unavailable'
+                : _formatDateTime(shipment.estimatedDelivery!),
+          ),
+          _DetailRow(
+            label: 'Last updated',
+            value: shipment.updatedAt == null
+                ? 'Unavailable'
+                : _formatDateTime(shipment.updatedAt!),
+            isLast: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimeline() {
+    return _InfoCard(
+      title: 'Shipment timeline',
+      icon: Icons.timeline_rounded,
+      child: _isLoadingEvents
+          ? const Center(child: CircularProgressIndicator(color: purple))
+          : _events.isEmpty
+          ? const Text(
+              'No shipment events are available yet.',
+              style: TextStyle(color: mutedColor),
+            )
+          : Column(
+              children: [
+                for (final (index, event) in _events.indexed)
+                  _TimelineEvent(
+                    event: event,
+                    isLast: index == _events.length - 1,
+                  ),
+              ],
+            ),
     );
   }
 
@@ -175,13 +435,19 @@ class _TrackShipmentPageState extends State<TrackShipmentPage> {
   }
 }
 
-class _UnavailableShipmentCard extends StatelessWidget {
-  const _UnavailableShipmentCard({required this.shipmentId});
+class _ShipmentSummaryCard extends StatelessWidget {
+  const _ShipmentSummaryCard({required this.shipment, required this.status});
 
-  final String shipmentId;
+  final ShipmentModel shipment;
+  final String status;
 
   @override
   Widget build(BuildContext context) {
+    final statusColor = status == 'delivered'
+        ? const Color(0xFF5CC6A3)
+        : status == 'cancelled'
+        ? const Color(0xFFE58B9B)
+        : purple;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -189,56 +455,245 @@ class _UnavailableShipmentCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: borderColor),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              const Icon(Icons.info_outline_rounded, color: purple, size: 25),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  shipmentId,
+          const Icon(Icons.inventory_2_outlined, color: purple, size: 28),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  shipment.shipmentId,
                   style: const TextStyle(
                     color: textColor,
                     fontSize: 17,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tracking code: ${shipment.trackingCode}',
+                  style: const TextStyle(color: mutedColor, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            _statusLabel(status),
+            style: TextStyle(color: statusColor, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoCard extends StatelessWidget {
+  const _InfoCard({
+    required this.title,
+    required this.icon,
+    required this.child,
+  });
+
+  final String title;
+  final IconData icon;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: purple, size: 22),
+              const SizedBox(width: 10),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          const Text(
-            'Shipment data unavailable',
-            style: TextStyle(
-              color: textColor,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({
+    required this.label,
+    required this.value,
+    this.isLast = false,
+  });
+
+  final String label;
+  final String value;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: isLast ? 0 : 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 125,
+            child: Text(
+              label,
+              style: const TextStyle(color: mutedColor, fontSize: 12),
             ),
           ),
-          const SizedBox(height: 6),
-          const Text(
-            'This shipment ID is formatted correctly, but no accessible '
-            'shipment record was found. Connect the shipment data source to '
-            'show its summary and progress.',
-            style: TextStyle(color: mutedColor, height: 1.45),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: textColor, fontSize: 13),
+            ),
           ),
-          const SizedBox(height: 18),
-          const _UnavailableRow(
-            icon: Icons.timeline_rounded,
-            title: 'Progress timeline',
-            message: 'Unavailable until shipment data is available.',
+        ],
+      ),
+    );
+  }
+}
+
+class _TimelineEvent extends StatelessWidget {
+  const _TimelineEvent({required this.event, required this.isLast});
+
+  final ShipmentEventModel event;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Column(
+            children: [
+              Icon(Icons.circle, color: purple, size: 13),
+              if (!isLast)
+                Expanded(
+                  child: Container(
+                    width: 1,
+                    color: borderColor,
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                  ),
+                ),
+            ],
           ),
-          const _UnavailableRow(
-            icon: Icons.location_on_outlined,
-            title: 'Latest truck location',
-            message: 'No live location data available.',
+          const SizedBox(width: 12),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: isLast ? 0 : 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    event.title,
+                    style: const TextStyle(
+                      color: textColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    _statusLabel(event.status),
+                    style: const TextStyle(color: purple, fontSize: 12),
+                  ),
+                  if (event.description != null) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      event.description!,
+                      style: const TextStyle(
+                        color: mutedColor,
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                  if (event.locationName != null ||
+                      event.timestamp != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      [
+                        if (event.locationName != null) event.locationName!,
+                        if (event.timestamp != null)
+                          _formatDateTime(event.timestamp!),
+                      ].join(' · '),
+                      style: const TextStyle(color: mutedColor, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
-          const _UnavailableRow(
-            icon: Icons.schedule_rounded,
-            title: 'Estimated arrival',
-            message: 'Not available.',
+        ],
+      ),
+    );
+  }
+}
+
+class _MessageCard extends StatelessWidget {
+  const _MessageCard({
+    required this.icon,
+    required this.message,
+    required this.color,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final IconData icon;
+  final String message;
+  final Color color;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  message,
+                  style: const TextStyle(color: mutedColor, height: 1.35),
+                ),
+                if (actionLabel != null && onAction != null)
+                  TextButton(
+                    onPressed: onAction,
+                    style: TextButton.styleFrom(
+                      foregroundColor: purple,
+                      padding: EdgeInsets.zero,
+                    ),
+                    child: Text(actionLabel!),
+                  ),
+              ],
+            ),
           ),
         ],
       ),
@@ -251,79 +706,12 @@ class _EmptyTrackingState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: borderColor),
-      ),
-      child: const Column(
-        children: [
-          Icon(Icons.route_outlined, color: purple, size: 42),
-          SizedBox(height: 14),
-          Text(
-            'No shipment selected',
-            style: TextStyle(
-              color: textColor,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          SizedBox(height: 7),
-          Text(
-            'Shipment status, timeline, and location will appear here when '
-            'accessible tracking data is available.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: mutedColor, height: 1.45),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _UnavailableRow extends StatelessWidget {
-  const _UnavailableRow({
-    required this.icon,
-    required this.title,
-    required this.message,
-  });
-
-  final IconData icon;
-  final String title;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: mutedColor, size: 21),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: textColor,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  message,
-                  style: const TextStyle(color: mutedColor, fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return const _MessageCard(
+      icon: Icons.route_outlined,
+      message:
+          'Shipment status, timeline, and location will appear here '
+          'when accessible tracking data is available.',
+      color: mutedColor,
     );
   }
 }
@@ -388,4 +776,25 @@ class _SectionHeading extends StatelessWidget {
       ],
     );
   }
+}
+
+String _statusLabel(String status) {
+  if (status.isEmpty) return 'Unknown';
+  return status
+      .split(RegExp(r'[_-]'))
+      .map(
+        (part) => part.isEmpty
+            ? part
+            : '${part[0].toUpperCase()}${part.substring(1)}',
+      )
+      .join(' ');
+}
+
+String _formatDateTime(DateTime date) {
+  final local = date.toLocal();
+  final month = local.month.toString().padLeft(2, '0');
+  final day = local.day.toString().padLeft(2, '0');
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '${local.year}-$month-$day $hour:$minute';
 }

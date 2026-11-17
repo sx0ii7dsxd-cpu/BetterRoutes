@@ -2,6 +2,27 @@
   "functions": {
     "api/email-change.js": {
       "maxDuration": 30
+    },
+    "api/shipments.js": {
+      "maxDuration": 30
+    },
+    "api/admin.js": {
+      "maxDuration": 30
+    },
+    "api/associations.js": {
+      "maxDuration": 30
+    },
+    "api/invitations.js": {
+      "maxDuration": 30
+    },
+    "api/shipment-authorization.js": {
+      "maxDuration": 30
+    },
+    "api/reads.js": {
+      "maxDuration": 30
+    },
+    "api/warehouses.js": {
+      "maxDuration": 30
     }
   }
 }
